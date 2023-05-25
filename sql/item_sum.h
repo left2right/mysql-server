@@ -1,7 +1,7 @@
 #ifndef ITEM_SUM_INCLUDED
 #define ITEM_SUM_INCLUDED
 
-/* Copyright (c) 2000, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2000, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -50,7 +51,6 @@
 #include "mysql/udf_registration_types.h"
 #include "mysql_time.h"
 #include "mysqld_error.h"
-#include "nullable.h"
 #include "sql/enum_query_type.h"
 #include "sql/gis/geometries_cs.h"
 #include "sql/gis/wkb.h"
@@ -126,8 +126,8 @@ class Aggregator {
   virtual bool setup(THD *) = 0;
 
   /**
-    Called when we need to wipe out all the data from the aggregator :
-    all the values acumulated and all the state.
+    Called when we need to wipe out all the data from the aggregator:
+    all the values accumulated and all the state.
     Cleans up the internal structures and resets them to their initial state.
   */
   virtual void clear() = 0;
@@ -568,10 +568,10 @@ class Item_sum : public Item_func {
     Item_field *item = new Item_field(field);
     if (item == nullptr) return nullptr;
     // Aggregated fields have no reference to an underlying table
-    assert(item->orig_db_name() == nullptr &&
-           item->orig_table_name() == nullptr);
+    assert(item->original_db_name() == nullptr &&
+           item->original_table_name() == nullptr);
     // Break the connection to the original field since this is an aggregation
-    item->set_orig_field_name(nullptr);
+    item->set_original_field_name(nullptr);
     return item;
   }
   table_map used_tables() const override {
@@ -583,6 +583,7 @@ class Item_sum : public Item_func {
                          Query_block *removed_query_block) override;
   void add_used_tables_for_aggr_func();
   bool is_null() override { return null_value; }
+
   void make_const() {
     // "forced_const" will make used_tables() return zero for this object
     forced_const = true;
@@ -645,6 +646,18 @@ class Item_sum : public Item_func {
   bool fix_fields(THD *thd, Item **ref) override;
 
   /**
+    Signal to the function that its arguments may have changed,
+    and that any internal caches etc. based on those arguments
+    must be updated accordingly.
+
+    This is used by the hypergraph optimizer when it rewrites
+    arguments to window functions to take into account that they
+    have been materialized into temporary tables, or that they
+    should read their values from the framebuffer.
+  */
+  virtual void update_after_wf_arguments_changed(THD *) {}
+
+  /**
     Called to initialize the aggregator.
   */
 
@@ -700,8 +713,8 @@ class Item_sum : public Item_func {
     input parameters which can be '?' and must be >=0: value isn't known
     before execution phase).
   */
-  virtual bool check_wf_semantics2(
-      Window_evaluation_requirements *reqs MY_ATTRIBUTE((unused))) {
+  virtual bool check_wf_semantics2(Window_evaluation_requirements *reqs
+                                   [[maybe_unused]]) {
     return false;
   }
 
@@ -710,6 +723,7 @@ class Item_sum : public Item_func {
 
   void cleanup() override;
 
+  Window *window() { return m_window; }
   const Window *window() const { return m_window; }
   bool reset_wf_state(uchar *arg) override;
 
@@ -751,6 +765,17 @@ class Item_sum : public Item_func {
     @return true if case two above holds, else false
   */
   bool wf_common_init();
+
+  /// Overridden by Item_rollup_sum_switcher.
+  virtual bool is_rollup_sum_wrapper() const { return false; }
+  /**
+   * In case we are an Item_rollup_sum_switcher,
+   * return the underlying Item_sum, otherwise, return this.
+   * Overridden by Item_rollup_sum_switcher.
+   */
+  virtual const Item_sum *unwrap_sum() const { return this; }
+  /// Non-const version
+  virtual Item_sum *unwrap_sum() { return this; }
 
  protected:
   /*
@@ -1409,8 +1434,9 @@ class Item_sum_variance : public Item_sum_num {
   /**
     Used in recurrence relation.
   */
-  double recurrence_m, recurrence_s;
-  double recurrence_s2;
+  double recurrence_m{0.0};
+  double recurrence_s{0.0};
+  double recurrence_s2{0.0};
   ulonglong count;
   uint sample;
   uint prec_increment;
@@ -1627,6 +1653,7 @@ class Item_sum_hybrid : public Item_sum {
  public:
   bool fix_fields(THD *, Item **) override;
   void clear() override;
+  void update_after_wf_arguments_changed(THD *thd) override;
   void split_sum_func(THD *thd, Ref_item_array ref_item_array,
                       mem_root_deque<Item *> *fields) override;
   double val_real() override;
@@ -2060,7 +2087,7 @@ int group_concat_key_cmp_with_distinct(const void *arg, const void *key1,
                                        const void *key2);
 int group_concat_key_cmp_with_order(const void *arg, const void *key1,
                                     const void *key2);
-int dump_leaf_key(void *key_arg, element_count count MY_ATTRIBUTE((unused)),
+int dump_leaf_key(void *key_arg, element_count count [[maybe_unused]],
                   void *item_arg);
 
 class Item_func_group_concat final : public Item_sum {
@@ -2116,8 +2143,7 @@ class Item_func_group_concat final : public Item_sum {
                                                 const void *key2);
   friend int group_concat_key_cmp_with_order(const void *arg, const void *key1,
                                              const void *key2);
-  friend int dump_leaf_key(void *key_arg,
-                           element_count count MY_ATTRIBUTE((unused)),
+  friend int dump_leaf_key(void *key_arg, element_count count [[maybe_unused]],
                            void *item_arg);
 
  public:
@@ -2162,6 +2188,16 @@ class Item_func_group_concat final : public Item_sum {
   bool get_time(MYSQL_TIME *ltime) override {
     return get_time_from_string(ltime);
   }
+
+  bool has_distinct() const noexcept { return distinct; }
+  const String *get_separator_str() const noexcept { return separator; }
+  uint32_t get_group_concat_max_len() const noexcept {
+    return group_concat_max_len;
+  }
+  const Mem_root_array<ORDER> &get_order_array() const noexcept {
+    return order_array;
+  }
+
   String *val_str(String *str) override;
   Item *copy_or_same(THD *thd) override;
   void no_rows_in_result() override;
@@ -2235,7 +2271,7 @@ class Item_row_number : public Item_non_framing_wf {
   const char *func_name() const override { return "row_number"; }
   enum Sumfunctype sum_func() const override { return ROW_NUMBER_FUNC; }
 
-  bool resolve_type(THD *thd MY_ATTRIBUTE((unused))) override {
+  bool resolve_type(THD *thd [[maybe_unused]]) override {
     set_data_type_longlong();
     return false;
   }
@@ -2265,16 +2301,15 @@ class Item_rank : public Item_non_framing_wf {
   // Execution state variables
   ulonglong m_rank_ctr;    ///< Increment when window order columns change
   ulonglong m_duplicates;  ///< Needed to make RANK different from DENSE_RANK
-  List<Cached_item> m_previous;  ///< Values of previous row's ORDER BY items
+  Mem_root_array<Cached_item *>
+      m_previous;  ///< Values of previous row's ORDER BY items
  public:
   Item_rank(const POS &pos, bool dense, PT_window *w)
       : Item_non_framing_wf(pos, w),
         m_dense(dense),
         m_rank_ctr(0),
         m_duplicates(0),
-        m_previous()
-
-  {
+        m_previous(*THR_MALLOC) {
     unsigned_flag = true;
   }
 
@@ -2288,7 +2323,7 @@ class Item_rank : public Item_non_framing_wf {
     return m_dense ? DENSE_RANK_FUNC : RANK_FUNC;
   }
 
-  bool resolve_type(THD *thd MY_ATTRIBUTE((unused))) override {
+  bool resolve_type(THD *thd [[maybe_unused]]) override {
     set_data_type_longlong();
     return false;
   }
@@ -2298,6 +2333,7 @@ class Item_rank : public Item_non_framing_wf {
   my_decimal *val_decimal(my_decimal *buff) override;
   String *val_str(String *) override;
 
+  void update_after_wf_arguments_changed(THD *thd) override;
   bool check_wf_semantics1(THD *thd, Query_block *select,
                            Window_evaluation_requirements *reqs) override;
   /**
@@ -2319,7 +2355,7 @@ class Item_cume_dist : public Item_non_framing_wf {
   const char *func_name() const override { return "cume_dist"; }
   enum Sumfunctype sum_func() const override { return CUME_DIST_FUNC; }
 
-  bool resolve_type(THD *thd MY_ATTRIBUTE((unused))) override {
+  bool resolve_type(THD *thd [[maybe_unused]]) override {
     set_data_type_double();
     return false;
   }
@@ -2360,7 +2396,7 @@ class Item_percent_rank : public Item_non_framing_wf {
   const char *func_name() const override { return "percent_rank"; }
   enum Sumfunctype sum_func() const override { return PERCENT_RANK_FUNC; }
 
-  bool resolve_type(THD *thd MY_ATTRIBUTE((unused))) override {
+  bool resolve_type(THD *thd [[maybe_unused]]) override {
     set_data_type_double();
     return false;
   }
@@ -2458,6 +2494,7 @@ class Item_lead_lag : public Item_non_framing_wf {
 
   bool resolve_type(THD *thd) override;
   bool fix_fields(THD *thd, Item **items) override;
+  void update_after_wf_arguments_changed(THD *thd) override;
   void clear() override;
   bool check_wf_semantics1(THD *thd, Query_block *select,
                            Window_evaluation_requirements *reqs) override;
@@ -2534,6 +2571,7 @@ class Item_first_last_value : public Item_sum {
 
   bool resolve_type(THD *thd) override;
   bool fix_fields(THD *thd, Item **items) override;
+  void update_after_wf_arguments_changed(THD *thd) override;
   void clear() override;
   bool check_wf_semantics1(THD *thd, Query_block *select,
                            Window_evaluation_requirements *reqs) override;
@@ -2600,6 +2638,7 @@ class Item_nth_value : public Item_sum {
 
   bool resolve_type(THD *thd) override;
   bool fix_fields(THD *thd, Item **items) override;
+  void update_after_wf_arguments_changed(THD *thd) override;
   bool setup_nth();
   void clear() override;
 
@@ -2658,6 +2697,7 @@ class Item_func_grouping : public Item_int_func {
   bool aggregate_check_group(uchar *arg) override;
   bool fix_fields(THD *thd, Item **ref) override;
   void update_used_tables() override;
+  bool aggregate_check_distinct(uchar *arg) override;
 };
 
 /**
@@ -2681,6 +2721,7 @@ class Item_rollup_sum_switcher final : public Item_sum {
     base_query_block = master()->base_query_block;
     aggr_query_block = master()->aggr_query_block;
     hidden = master()->hidden;
+    set_nullable(master()->is_nullable());
     set_distinct(master()->has_with_distinct());
     set_data_type_from_item(master());
   }
@@ -2731,6 +2772,7 @@ class Item_rollup_sum_switcher final : public Item_sum {
   // Used when create_tmp_table() needs to delay application of aggregate
   // functions to a later stage in the query processing.
   Item *get_arg(uint i) override { return master()->get_arg(i); }
+  const Item *get_arg(uint i) const override { return master()->get_arg(i); }
   Item *set_arg(THD *thd, uint i, Item *new_val) override {
     Item *ret = nullptr;
     for (int j = 0; j < m_num_levels; ++j) {
@@ -2743,6 +2785,10 @@ class Item_rollup_sum_switcher final : public Item_sum {
   // Used by AggregateIterator.
   void set_current_rollup_level(int level) { m_current_rollup_level = level; }
   inline Item_sum *master() const { return child(0); }
+
+  bool is_rollup_sum_wrapper() const override { return true; }
+  const Item_sum *unwrap_sum() const override { return master(); }
+  Item_sum *unwrap_sum() override { return master(); }
 
  private:
   inline Item *current_arg() const;
@@ -2758,7 +2804,7 @@ class Item_rollup_sum_switcher final : public Item_sum {
 
 class Item_sum_collect : public Item_sum {
  private:
-  Mysql::Nullable<gis::srid_t> srid;
+  std::optional<gis::srid_t> srid;
   std::unique_ptr<gis::Geometrycollection> m_geometrycollection;
   void pop_front();
 

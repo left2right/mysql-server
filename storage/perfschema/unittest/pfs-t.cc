@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2008, 2023, Oracle and/or its affiliates.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -35,9 +35,12 @@
 #include "storage/perfschema/pfs_instr_class.h"
 #include "storage/perfschema/pfs_server.h"
 #include "storage/perfschema/terminology_use_previous.cc"
+#include "storage/perfschema/unittest/stub_digest.h"
 #include "storage/perfschema/unittest/stub_pfs_defaults.h"
 #include "storage/perfschema/unittest/stub_pfs_plugin_table.h"
+#include "storage/perfschema/unittest/stub_pfs_tls_channel.h"
 #include "storage/perfschema/unittest/stub_print_error.h"
+#include "storage/perfschema/unittest/stub_server_telemetry.h"
 #include "unittest/mytap/tap.h"
 
 /* test helpers, to simulate the setup */
@@ -65,9 +68,9 @@ static PFS_file *lookup_file_by_name(const char *name) {
       to "/path/to/current/directory/foo", so we remove the
       directory name here to find it back.
     */
-    dirlen = dirname_length(pfs->m_filename);
-    filename = pfs->m_filename + dirlen;
-    filename_length = pfs->m_filename_length - dirlen;
+    dirlen = dirname_length(pfs->m_file_name.ptr());
+    filename = pfs->m_file_name.ptr() + dirlen;
+    filename_length = pfs->m_file_name.length() - dirlen;
     if ((len == filename_length) &&
         (strncmp(name, filename, filename_length) == 0))
       return pfs;
@@ -145,6 +148,22 @@ static void test_bootstrap() {
   param.m_max_digest_length = 0;
   param.m_max_sql_text_length = 0;
   param.m_error_sizing = 0;
+  param.m_consumer_events_stages_current_enabled = false;
+  param.m_consumer_events_stages_history_enabled = false;
+  param.m_consumer_events_stages_history_long_enabled = false;
+  param.m_consumer_events_statements_cpu_enabled = false;
+  param.m_consumer_events_statements_current_enabled = false;
+  param.m_consumer_events_statements_history_enabled = false;
+  param.m_consumer_events_statements_history_long_enabled = false;
+  param.m_consumer_events_transactions_current_enabled = false;
+  param.m_consumer_events_transactions_history_enabled = false;
+  param.m_consumer_events_transactions_history_long_enabled = false;
+  param.m_consumer_events_waits_current_enabled = false;
+  param.m_consumer_events_waits_history_enabled = false;
+  param.m_consumer_events_waits_history_long_enabled = false;
+  param.m_consumer_global_instrumentation_enabled = false;
+  param.m_consumer_thread_instrumentation_enabled = false;
+  param.m_consumer_statement_digest_enabled = false;
 
   param.m_hints.m_table_definition_cache = 100;
   param.m_hints.m_table_open_cache = 100;
@@ -255,7 +274,13 @@ static void test_bootstrap() {
   psi = statement_boot->get_interface(PSI_STATEMENT_VERSION_1);
   ok(psi == nullptr, "no statement version 1");
   psi = statement_boot->get_interface(PSI_STATEMENT_VERSION_2);
-  ok(psi != nullptr, "statement version 2");
+  ok(psi == nullptr, "no statement version 2");
+  psi = statement_boot->get_interface(PSI_STATEMENT_VERSION_3);
+  ok(psi == nullptr, "no statement version 3");
+  psi = statement_boot->get_interface(PSI_STATEMENT_VERSION_4);
+  ok(psi == nullptr, "no statement version 4");
+  psi = statement_boot->get_interface(PSI_STATEMENT_VERSION_5);
+  ok(psi != nullptr, "statement version 5");
 
   psi = transaction_boot->get_interface(0);
   ok(psi == nullptr, "no transaction version 0");
@@ -364,6 +389,22 @@ static void load_perfschema(
   param.m_max_digest_length = 0;
   param.m_max_sql_text_length = 1000;
   param.m_error_sizing = 0;
+  param.m_consumer_events_stages_current_enabled = false;
+  param.m_consumer_events_stages_history_enabled = false;
+  param.m_consumer_events_stages_history_long_enabled = false;
+  param.m_consumer_events_statements_cpu_enabled = false;
+  param.m_consumer_events_statements_current_enabled = false;
+  param.m_consumer_events_statements_history_enabled = false;
+  param.m_consumer_events_statements_history_long_enabled = false;
+  param.m_consumer_events_transactions_current_enabled = false;
+  param.m_consumer_events_transactions_history_enabled = false;
+  param.m_consumer_events_transactions_history_long_enabled = false;
+  param.m_consumer_events_waits_current_enabled = false;
+  param.m_consumer_events_waits_history_enabled = false;
+  param.m_consumer_events_waits_history_long_enabled = false;
+  param.m_consumer_global_instrumentation_enabled = false;
+  param.m_consumer_thread_instrumentation_enabled = false;
+  param.m_consumer_statement_digest_enabled = false;
 
   param.m_hints.m_table_definition_cache = 100;
   param.m_hints.m_table_open_cache = 100;
@@ -399,7 +440,7 @@ static void load_perfschema(
   *stage_service =
       (PSI_stage_service_t *)stage_boot->get_interface(PSI_SOCKET_VERSION_1);
   *statement_service = (PSI_statement_service_t *)statement_boot->get_interface(
-      PSI_STATEMENT_VERSION_2);
+      PSI_CURRENT_STATEMENT_VERSION);
   *system_service =
       (PSI_system_service_t *)system_boot->get_interface(PSI_SYSTEM_VERSION_1);
   *transaction_service =
@@ -447,7 +488,6 @@ static void test_bad_registration() {
                   &statement_service, &transaction_service, &memory_service,
                   &error_service, &data_lock_service, &system_service,
                   &tls_channel_service);
-
   /*
     Test that length('wait/synch/mutex/' (17) + category + '/' (1)) < 32
     --> category can be up to 13 chars for a mutex.
@@ -531,7 +571,7 @@ static void test_bad_registration() {
   ok(dummy_rwlock_key == 0, "zero key");
   dummy_rwlock_key = 9999;
   rwlock_service->register_rwlock("123456789012", bad_rwlock_1, 1);
-  ok(dummy_rwlock_key == 2, "assigned key");
+  ok(dummy_rwlock_key == 1, "assigned key");
 
   /*
     Test that length('wait/synch/rwlock/' (18) + category + '/' (1) + name) <=
@@ -576,7 +616,7 @@ static void test_bad_registration() {
   ok(dummy_rwlock_key == 0, "zero key");
 
   rwlock_service->register_rwlock("X", bad_rwlock_3, 1);
-  ok(dummy_rwlock_key == 3, "assigned key");
+  ok(dummy_rwlock_key == 2, "assigned key");
 
   dummy_rwlock_key = 9999;
   PSI_rwlock_info bad_rwlock_3_sx[] = {
@@ -591,7 +631,7 @@ static void test_bad_registration() {
   ok(dummy_rwlock_key == 0, "zero key SX");
 
   rwlock_service->register_rwlock("Y", bad_rwlock_3_sx, 1);
-  ok(dummy_rwlock_key == 4, "assigned key SX");
+  ok(dummy_rwlock_key == 3, "assigned key SX");
 
   /*
     Test that length('wait/synch/cond/' (16) + category + '/' (1)) < 32
@@ -657,7 +697,7 @@ static void test_bad_registration() {
   */
 
   PSI_thread_key dummy_thread_key = 9999;
-  PSI_thread_info bad_thread_1[] = {{&dummy_thread_key, "X", 0, 0, ""}};
+  PSI_thread_info bad_thread_1[] = {{&dummy_thread_key, "X", "X", 0, 0, ""}};
 
   thread_service->register_thread("/", bad_thread_1, 1);
   ok(dummy_thread_key == 0, "zero key");
@@ -689,7 +729,7 @@ static void test_bad_registration() {
        "12345678901234567890123456789012345678901234567890"
        "12345678901234567890123456789012345678901234567890"
        "12345678901234567890",
-       0, 0, ""}};
+       "BAD", 0, 0, ""}};
 
   thread_service->register_thread("X", bad_thread_2, 1);
   ok(dummy_thread_key == 0, "zero key");
@@ -701,7 +741,7 @@ static void test_bad_registration() {
        "12345678901234567890123456789012345678901234567890"
        "12345678901234567890123456789012345678901234567890"
        "1234567890123456789",
-       0, 0, ""}};
+       "OK", 0, 0, ""}};
 
   thread_service->register_thread("XX", bad_thread_3, 1);
   ok(dummy_thread_key == 0, "zero key");
@@ -872,7 +912,7 @@ static void test_init_disabled() {
   PSI_socket_info all_socket[] = {{&socket_key_A, "S-A", 0, 0, ""}};
 
   PSI_thread_key thread_key_1;
-  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", 0, 0, ""}};
+  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", "T-1", 0, 0, ""}};
 
   mutex_service->register_mutex("test", all_mutex, 1);
   rwlock_service->register_rwlock("test", all_rwlock, 1);
@@ -895,7 +935,7 @@ static void test_init_disabled() {
 
   /* Preparation */
 
-  thread_1 = thread_service->new_thread(thread_key_1, nullptr, 0);
+  thread_1 = thread_service->new_thread(thread_key_1, 12, nullptr, 0);
   ok(thread_1 != nullptr, "T-1");
   thread_service->set_thread_id(thread_1, 1);
 
@@ -1312,7 +1352,7 @@ static void test_locker_disabled() {
   PSI_socket_info all_socket[] = {{&socket_key_A, "S-A", 0, 0, ""}};
 
   PSI_thread_key thread_key_1;
-  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", 0, 0, ""}};
+  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", "T-1", 0, 0, ""}};
 
   mutex_service->register_mutex("test", all_mutex, 1);
   rwlock_service->register_rwlock("test", all_rwlock, 1);
@@ -1335,7 +1375,7 @@ static void test_locker_disabled() {
 
   /* Preparation */
 
-  thread_1 = thread_service->new_thread(thread_key_1, nullptr, 0);
+  thread_1 = thread_service->new_thread(thread_key_1, 12, nullptr, 0);
   ok(thread_1 != nullptr, "T-1");
   thread_service->set_thread_id(thread_1, 1);
 
@@ -1676,7 +1716,7 @@ static void test_file_instrumentation_leak() {
                               {&file_key_B, "F-B", 0, 0, ""}};
 
   PSI_thread_key thread_key_1;
-  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", 0, 0, ""}};
+  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", "T-1", 0, 0, ""}};
 
   file_service->register_file("test", all_file, 2);
   thread_service->register_thread("test", all_thread, 1);
@@ -1688,7 +1728,7 @@ static void test_file_instrumentation_leak() {
 
   /* Preparation */
 
-  thread_1 = thread_service->new_thread(thread_key_1, nullptr, 0);
+  thread_1 = thread_service->new_thread(thread_key_1, 12, nullptr, 0);
   ok(thread_1 != nullptr, "T-1");
   thread_service->set_thread_id(thread_1, 1);
 
@@ -1855,6 +1895,22 @@ static void test_event_name_index() {
   param.m_max_digest_length = 0;
   param.m_max_sql_text_length = 1000;
   param.m_error_sizing = 0;
+  param.m_consumer_events_stages_current_enabled = false;
+  param.m_consumer_events_stages_history_enabled = false;
+  param.m_consumer_events_stages_history_long_enabled = false;
+  param.m_consumer_events_statements_cpu_enabled = false;
+  param.m_consumer_events_statements_current_enabled = false;
+  param.m_consumer_events_statements_history_enabled = false;
+  param.m_consumer_events_statements_history_long_enabled = false;
+  param.m_consumer_events_transactions_current_enabled = false;
+  param.m_consumer_events_transactions_history_enabled = false;
+  param.m_consumer_events_transactions_history_long_enabled = false;
+  param.m_consumer_events_waits_current_enabled = false;
+  param.m_consumer_events_waits_history_enabled = false;
+  param.m_consumer_events_waits_history_long_enabled = false;
+  param.m_consumer_global_instrumentation_enabled = false;
+  param.m_consumer_thread_instrumentation_enabled = false;
+  param.m_consumer_statement_digest_enabled = false;
 
   param.m_mutex_sizing = 0;
   param.m_rwlock_sizing = 0;
@@ -1929,7 +1985,7 @@ static void test_event_name_index() {
       (PSI_stage_service_t *)stage_boot->get_interface(PSI_STAGE_VERSION_1);
   ok(stage_service != nullptr, "stage_service");
   statement_service = (PSI_statement_service_t *)statement_boot->get_interface(
-      PSI_STATEMENT_VERSION_2);
+      PSI_CURRENT_STATEMENT_VERSION);
   ok(statement_service != nullptr, "statement_service");
   transaction_service =
       (PSI_transaction_service_t *)transaction_boot->get_interface(
@@ -1972,10 +2028,10 @@ static void test_event_name_index() {
   rwlock_service->register_rwlock("X", dummy_rwlocks, 2);
   rwlock_class = find_rwlock_class(dummy_rwlock_key_1);
   ok(rwlock_class != nullptr, "rwlock class 1");
-  ok(rwlock_class->m_event_name_index == 15, "index 15");
+  ok(rwlock_class->m_event_name_index == 14, "index 14");
   rwlock_class = find_rwlock_class(dummy_rwlock_key_2);
   ok(rwlock_class != nullptr, "rwlock class 2");
-  ok(rwlock_class->m_event_name_index == 16, "index 16");
+  ok(rwlock_class->m_event_name_index == 15, "index 15");
 
   PFS_cond_class *cond_class;
   PSI_cond_key dummy_cond_key_1;
@@ -2059,7 +2115,7 @@ static void test_memory_instruments() {
   PSI_memory_info all_memory[] = {{&memory_key_A, "M-A", 0, 0, ""}};
 
   PSI_thread_key thread_key_1;
-  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", 0, 0, ""}};
+  PSI_thread_info all_thread[] = {{&thread_key_1, "T-1", "T-1", 0, 0, ""}};
 
   memory_service->register_memory("test", all_memory, 1);
   thread_service->register_thread("test", all_thread, 1);
@@ -2070,7 +2126,7 @@ static void test_memory_instruments() {
 
   /* Preparation */
 
-  thread_1 = thread_service->new_thread(thread_key_1, nullptr, 0);
+  thread_1 = thread_service->new_thread(thread_key_1, 12, nullptr, 0);
   ok(thread_1 != nullptr, "T-1");
   thread_service->set_thread_id(thread_1, 1);
 
@@ -2187,6 +2243,22 @@ static void test_leaks() {
   param.m_max_digest_length = 1000;
   param.m_max_sql_text_length = 1000;
   param.m_error_sizing = 1000;
+  param.m_consumer_events_stages_current_enabled = false;
+  param.m_consumer_events_stages_history_enabled = false;
+  param.m_consumer_events_stages_history_long_enabled = false;
+  param.m_consumer_events_statements_cpu_enabled = false;
+  param.m_consumer_events_statements_current_enabled = false;
+  param.m_consumer_events_statements_history_enabled = false;
+  param.m_consumer_events_statements_history_long_enabled = false;
+  param.m_consumer_events_transactions_current_enabled = false;
+  param.m_consumer_events_transactions_history_enabled = false;
+  param.m_consumer_events_transactions_history_long_enabled = false;
+  param.m_consumer_events_waits_current_enabled = false;
+  param.m_consumer_events_waits_history_enabled = false;
+  param.m_consumer_events_waits_history_long_enabled = false;
+  param.m_consumer_global_instrumentation_enabled = false;
+  param.m_consumer_thread_instrumentation_enabled = false;
+  param.m_consumer_statement_digest_enabled = false;
 
   param.m_hints.m_table_definition_cache = 100;
   param.m_hints.m_table_open_cache = 100;
@@ -2229,18 +2301,18 @@ File my_create_temp_file(const char **filename) {
 }
 
 /* Simulated my_close() */
-int my_close(File fd MY_ATTRIBUTE((unused)), bool success) {
+int my_close(File fd [[maybe_unused]], bool success) {
   return (success ? 0 : 1);
 }
 
 /* Simulated my_delete() */
-int my_delete(const char *filename MY_ATTRIBUTE((unused)), bool success) {
+int my_delete(const char *filename [[maybe_unused]], bool success) {
   return (success ? 0 : 1);
 }
 
 /* Simulated my_rename() */
-int my_rename(const char *from MY_ATTRIBUTE((unused)),
-              const char *to MY_ATTRIBUTE((unused)), bool success) {
+int my_rename(const char *from [[maybe_unused]],
+              const char *to [[maybe_unused]], bool success) {
   return (success ? 0 : 1);
 }
 
@@ -2283,22 +2355,23 @@ static void test_file_operations() {
   PSI_file_key file_key;
   PSI_file_info all_file[] = {{&file_key, "File Class", 0, 0, ""}};
   PSI_thread_key thread_key;
-  PSI_thread_info all_thread[] = {{&thread_key, "Thread Class", 0, 0, ""}};
+  PSI_thread_info all_thread[] = {
+      {&thread_key, "Thread Class", "OS NAME", 0, 0, ""}};
 
   file_service->register_file("test", all_file, 1);
   thread_service->register_thread("test", all_thread, 1);
 
   /* Create Thread A and B to simulate operations from different threads. */
-  thread_A = thread_service->new_thread(thread_key, NULL, 0);
-  ok(thread_A != NULL, "Thread A");
+  thread_A = thread_service->new_thread(thread_key, 12, nullptr, 0);
+  ok(thread_A != nullptr, "Thread A");
   thread_service->set_thread_id(thread_A, 1);
 
-  thread_B = thread_service->new_thread(thread_key, NULL, 0);
-  ok(thread_B != NULL, "Thread B");
+  thread_B = thread_service->new_thread(thread_key, 12, nullptr, 0);
+  ok(thread_B != nullptr, "Thread B");
   thread_service->set_thread_id(thread_B, 1);
 
   file_class = find_file_class(file_key);
-  ok(file_class != NULL, "File Class");
+  ok(file_class != nullptr, "File Class");
 
   flag_global_instrumentation = true;
   flag_thread_instrumentation = true;
@@ -2321,8 +2394,8 @@ static void test_file_operations() {
   thread_service->set_thread(thread_A);
   /* Create a temporary file */
   locker_A = file_service->get_thread_file_name_locker(
-      &state_A, file_key, PSI_FILE_CREATE, NULL, &locker_A);
-  ok(locker_A != NULL, "locker A");
+      &state_A, file_key, PSI_FILE_CREATE, nullptr, &locker_A);
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_open_wait(locker_A, __FILE__, __LINE__);
   /* Returns filename with embedded FD */
   fd1 = my_create_temp_file(&filename1);
@@ -2332,7 +2405,7 @@ static void test_file_operations() {
   /* Start mysql_file_close */
   locker_A = file_service->get_thread_file_descriptor_locker(&state_A, fd1,
                                                              PSI_FILE_CLOSE);
-  ok(locker_A != NULL, "locker A");
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_close_wait(locker_A, __FILE__, __LINE__);
   rc = my_close(fd1, true); /* successful close, FD released */
 
@@ -2342,8 +2415,8 @@ static void test_file_operations() {
      mysql_file_close()
   */
   locker_B = file_service->get_thread_file_name_locker(
-      &state_B, file_key, PSI_FILE_CREATE, NULL, &locker_B);
-  ok(locker_B != NULL, "locker B");
+      &state_B, file_key, PSI_FILE_CREATE, nullptr, &locker_B);
+  ok(locker_B != nullptr, "locker B");
   file_service->start_file_open_wait(locker_B, __FILE__, __LINE__);
   /* Returns same FD and filename as Thread A */
   fd2 = my_create_temp_file(&filename2);
@@ -2358,7 +2431,7 @@ static void test_file_operations() {
   /* Close the file and clean up */
   locker_B = file_service->get_thread_file_descriptor_locker(&state_B, fd2,
                                                              PSI_FILE_CLOSE);
-  ok(locker_B != NULL, "locker A");
+  ok(locker_B != nullptr, "locker A");
   file_service->start_file_close_wait(locker_B, __FILE__, __LINE__);
   rc = my_close(fd2, true); /* successful close, FD released */
   file_service->end_file_close_wait(locker_B, rc);
@@ -2373,8 +2446,8 @@ static void test_file_operations() {
   /* Create a temporary file */
   thread_service->set_thread(thread_A);
   locker_A = file_service->get_thread_file_name_locker(
-      &state_A, file_key, PSI_FILE_CREATE, NULL, &locker_A);
-  ok(locker_A != NULL, "locker A");
+      &state_A, file_key, PSI_FILE_CREATE, nullptr, &locker_A);
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_open_wait(locker_A, __FILE__, __LINE__);
   /* Returns filename with embedded FD */
   fd1 = my_create_temp_file(&filename1);
@@ -2388,7 +2461,7 @@ static void test_file_operations() {
   locker_A = file_service->get_thread_file_descriptor_locker(&state_A, fd1,
                                                              PSI_FILE_CLOSE);
   /* File instrumentation should be deleted for temporary files. */
-  ok(locker_A == NULL, "locker A is NULL");
+  ok(locker_A == nullptr, "locker A is NULL");
   rc = my_close(fd1, true); /* successful close, FD released */
 
   /* Re-enable the file instrumentation */
@@ -2397,8 +2470,8 @@ static void test_file_operations() {
 
   /* Open the same temporary file with the same FD */
   locker_A = file_service->get_thread_file_name_locker(
-      &state_A, file_key, PSI_FILE_CREATE, NULL, &locker_A);
-  ok(locker_A != NULL, "locker A");
+      &state_A, file_key, PSI_FILE_CREATE, nullptr, &locker_A);
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_open_wait(locker_A, __FILE__, __LINE__);
   /* Returns filename with embedded FD */
   fd1 = my_create_temp_file(&filename1);
@@ -2407,7 +2480,7 @@ static void test_file_operations() {
   /* mysql_file_close() */
   locker_A = file_service->get_thread_file_descriptor_locker(&state_A, fd1,
                                                              PSI_FILE_CLOSE);
-  ok(locker_A != NULL, "locker A");
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_close_wait(locker_A, __FILE__, __LINE__);
   rc = my_close(fd1, true); /* successful close, FD released */
   /* Checks for correct open count */
@@ -2423,8 +2496,8 @@ static void test_file_operations() {
   /* Create a temporary file */
   thread_service->set_thread(thread_A);
   locker_A = file_service->get_thread_file_name_locker(
-      &state_A, file_key, PSI_FILE_CREATE, NULL, &locker_A);
-  ok(locker_A != NULL, "locker A");
+      &state_A, file_key, PSI_FILE_CREATE, nullptr, &locker_A);
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_open_wait(locker_A, __FILE__, __LINE__);
   /* Returns filename with embedded FD */
   fd1 = my_create_temp_file(&filename1);
@@ -2438,7 +2511,7 @@ static void test_file_operations() {
   locker_A = file_service->get_thread_file_name_locker(
       &state_A, file_key, PSI_FILE_DELETE, temp_filename1, &locker_A);
   /* Locker should be NULL if instrumentation disabled. */
-  ok(locker_A == NULL, "locker A");
+  ok(locker_A == nullptr, "locker A");
   rc = my_delete(temp_filename1, true); /* successful delete */
 
   /* Re-enable the file instrumentation */
@@ -2447,8 +2520,8 @@ static void test_file_operations() {
 
   /* Open the same temporary file with the same FD */
   locker_A = file_service->get_thread_file_name_locker(
-      &state_A, file_key, PSI_FILE_CREATE, NULL, &locker_A);
-  ok(locker_A != NULL, "locker A");
+      &state_A, file_key, PSI_FILE_CREATE, nullptr, &locker_A);
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_open_wait(locker_A, __FILE__, __LINE__);
   /* Returns filename with embedded FD */
   fd1 = my_create_temp_file(&filename1);
@@ -2458,7 +2531,7 @@ static void test_file_operations() {
   /* mysql_file_delete() */
   locker_A = file_service->get_thread_file_name_locker(
       &state_A, file_key, PSI_FILE_DELETE, temp_filename1, &locker_A);
-  ok(locker_A != NULL, "locker A");
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_close_wait(locker_A, __FILE__, __LINE__);
   rc = my_delete(temp_filename1, true); /* successful delete */
   file_service->end_file_close_wait(locker_A, rc);
@@ -2473,8 +2546,8 @@ static void test_file_operations() {
   /* Create a temporary file */
   thread_service->set_thread(thread_A);
   locker_A = file_service->get_thread_file_name_locker(
-      &state_A, file_key, PSI_FILE_CREATE, NULL, &locker_A);
-  ok(locker_A != NULL, "locker A");
+      &state_A, file_key, PSI_FILE_CREATE, nullptr, &locker_A);
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_open_wait(locker_A, __FILE__, __LINE__);
   /* Returns filename with embedded FD */
   fd1 = my_create_temp_file(&filename1);
@@ -2488,7 +2561,7 @@ static void test_file_operations() {
   locker_A = file_service->get_thread_file_name_locker(
       &state_A, file_key, PSI_FILE_RENAME, temp_filename1, &locker_A);
   /* Locker should be NULL if file instrumentation disabled. */
-  ok(locker_A == NULL, "locker A");
+  ok(locker_A == nullptr, "locker A");
   rc = my_rename(temp_filename1, temp_filename2, true); /* success */
 
   /* Re-enable the file instrumentation */
@@ -2498,15 +2571,15 @@ static void test_file_operations() {
   /* mysql_file_delete() */
   locker_A = file_service->get_thread_file_name_locker(
       &state_A, file_key, PSI_FILE_DELETE, temp_filename2, &locker_A);
-  ok(locker_A != NULL, "locker A");
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_close_wait(locker_A, __FILE__, __LINE__);
   rc = my_delete(temp_filename2, true); /* success */
   file_service->end_file_close_wait(locker_A, rc);
 
   /* Open the original file with the same FD */
   locker_A = file_service->get_thread_file_name_locker(
-      &state_A, file_key, PSI_FILE_CREATE, NULL, &locker_A);
-  ok(locker_A != NULL, "locker A");
+      &state_A, file_key, PSI_FILE_CREATE, nullptr, &locker_A);
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_open_wait(locker_A, __FILE__, __LINE__);
   /* Returns filename with embedded FD */
   fd1 = my_create_temp_file(&filename1);
@@ -2515,7 +2588,7 @@ static void test_file_operations() {
   /* mysql_file_delete() */
   locker_A = file_service->get_thread_file_name_locker(
       &state_A, file_key, PSI_FILE_DELETE, temp_filename1, &locker_A);
-  ok(locker_A != NULL, "locker A");
+  ok(locker_A != nullptr, "locker A");
   file_service->start_file_close_wait(locker_A, __FILE__, __LINE__);
   rc = my_delete(temp_filename1, true); /* successful delete */
   file_service->end_file_close_wait(locker_A, rc);
@@ -2580,7 +2653,7 @@ static void do_all_tests() {
 }
 
 int main(int, char **) {
-  plan(414);
+  plan(417);
 
   MY_INIT("pfs-t");
   do_all_tests();

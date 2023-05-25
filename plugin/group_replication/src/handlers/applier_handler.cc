@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2014, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -127,9 +127,7 @@ int Applier_handler::handle_event(Pipeline_event *event, Continuation *cont) {
   if (event->get_event_type() != binary_log::TRANSACTION_CONTEXT_EVENT) {
     error = channel_interface.queue_packet((const char *)p->payload, p->len);
 
-    if (event->get_event_type() == binary_log::GTID_LOG_EVENT &&
-        local_member_info->get_recovery_status() ==
-            Group_member_info::MEMBER_ONLINE) {
+    if (event->get_event_type() == binary_log::GTID_LOG_EVENT) {
       applier_module->get_pipeline_stats_member_collector()
           ->increment_transactions_waiting_apply();
     }

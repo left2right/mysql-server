@@ -35,6 +35,9 @@ my $NDB_PRINT_BACKUP_FILE =  my_find_bin($bindir,
 # Directory containing backups from earlier versions of NDB
 my $NDB_SAVED_BACKUPS = "$ENV{MYSQL_TEST_DIR}/suite/ndb/backups";
 
+# configuration file with backup password
+my $NDB_ENCRYPTED_CNF = "$ENV{MYSQL_TEST_DIR}/suite/ndb/encrypted_backup.cnf";
+
 sub sorted
 {
   sort(@_);
@@ -43,13 +46,20 @@ sub sorted
 sub process
 {
   return unless -f;
-  print "ndb_print_backup_file " .
+  my $pwd_arg;
+  if ($File::Find::name =~ /encrypted/)
+  {
+    $pwd_arg = "--defaults-extra-file=${NDB_ENCRYPTED_CNF} ";
+  }
+  my $pwd_arg_printable = $pwd_arg;
+  $pwd_arg_printable =~ s|$ENV{MYSQL_TEST_DIR}/||;
+  print "ndb_print_backup_file ${pwd_arg_printable}" .
         "suite/ndb/backups" .
           substr($File::Find::name, length($NDB_SAVED_BACKUPS)) .
         "\n";
 
   my $output;
-  open(my $fh, '-|', "$NDB_PRINT_BACKUP_FILE ${File::Find::name}")
+  open(my $fh, '-|', "$NDB_PRINT_BACKUP_FILE ${pwd_arg}$File::Find::name")
     or die("Unable to open $File::Find::name: $!\n");
   {
     local $/;
@@ -99,23 +109,32 @@ let $dump_file = $MYSQLTEST_VARDIR/tmp/ndb_mgmd_dump_file.txt;
 --remove_file $dump_file
 
 --echo Verify that ndb_print_backup_file can be used to check LCP Data and CTL files individually
+# ByteOrder is masked until Bug#32470157 is fixed so that ndb_print_backup_file
+# tool works well with both little endian and big endian systems.
 
 --echo ndb_print_backup_file suite/ndb/backups/LCP/0/T22F0.ctl
+--replace_regex /ByteOrder: 0x\d{8}/ByteOrder: 0xXXXXXXXX/
 --exec $NDB_PRINT_BACKUP_FILE $NDB_SAVED_BACKUPS/LCP/0/T22F0.ctl
 
 --echo ndb_print_backup_file suite/ndb/backups/LCP/0/T10F0.Data
+--replace_regex /ByteOrder: 0x\d{8}/ByteOrder: 0xXXXXXXXX/
 --exec $NDB_PRINT_BACKUP_FILE $NDB_SAVED_BACKUPS/LCP/0/T10F0.Data
 
 --echo ndb_print_backup_file suite/ndb/backups/LCP/0/T19F0.ctl
+--replace_regex /ByteOrder: 0x\d{8}/ByteOrder: 0xXXXXXXXX/
 --exec $NDB_PRINT_BACKUP_FILE $NDB_SAVED_BACKUPS/LCP/0/T19F0.ctl
 
 --echo ndb_print_backup_file suite/ndb/backups/LCP/1/T22F0.Data
+--replace_regex /ByteOrder: 0x\d{8}/ByteOrder: 0xXXXXXXXX/
 --exec $NDB_PRINT_BACKUP_FILE $NDB_SAVED_BACKUPS/LCP/1/T22F0.Data
 
 
---echo Verify that ndb_print_backup_file can be used to check
---echo a set of LCP CTL + DATA files that will be used to restore a fragment
+# The following scenario is disabled until Bug#33053631 is fixed so that
+# ndb_print_backup_file fully handles backup or lcp files written on
+# systems with other byte order
 
---echo ndb_print_backup_file -c 0 -t 22 -f 0 --print-restored-rows
---exec cd $NDB_SAVED_BACKUPS/LCP && $NDB_PRINT_BACKUP_FILE -c 0 -t 22 -f 0 --print-restored-rows
+#--echo Verify that ndb_print_backup_file can be used to check
+#--echo a set of LCP CTL + DATA files that will be used to restore a fragment
 
+#--echo ndb_print_backup_file -c 0 -t 22 -f 0 --print-restored-rows
+#--exec cd $NDB_SAVED_BACKUPS/LCP && $NDB_PRINT_BACKUP_FILE -c 0 -t 22 -f 0 --print-restored-rows

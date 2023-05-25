@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2019, 2021, Oracle and/or its affiliates.
+  Copyright (c) 2019, 2023, Oracle and/or its affiliates.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -25,11 +25,13 @@
 #include "mysqlrouter/classic_protocol_codec_message.h"
 
 #include <list>
+#include <optional>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "mysqlrouter/classic_protocol_constants.h"
+#include "mysqlrouter/classic_protocol_message.h"
 #include "test_classic_protocol_codec.h"
 
 // string_literals are supposed to solve the same problem, but they are broken
@@ -83,7 +85,7 @@ namespace classic_protocol {
 namespace message {
 namespace server {
 std::ostream &operator<<(std::ostream &os, const AuthMethodData &v) {
-  os << static_cast<uint16_t>(v.packet_type()) << ", " << v.auth_method_data();
+  os << v.auth_method_data();
   return os;
 }
 }  // namespace server
@@ -102,7 +104,9 @@ TEST_P(CodecMessageServerAuthMethodDataTest, decode) {
 
 const CodecParam<classic_protocol::message::server::AuthMethodData>
     codec_message_server_authmethoddata_param[] = {
-        {"auth_fast_ack", {0x03, ""}, {}, {0x03}},
+        {"caching_sha2_password_public_key", {"\x02"}, {}, {0x01, 0x02}},
+        {"caching_sha2_password_fast_ack", {"\x03"}, {}, {0x01, 0x03}},
+        {"caching_sha2_password_full_handshake", {"\x04"}, {}, {0x01, 0x04}},
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -210,6 +214,46 @@ INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageServerOkTest,
                          [](auto const &test_param_info) {
                            return test_param_info.param.test_name;
                          });
+
+TEST(MessageServerOk, warning_count) {
+  classic_protocol::message::server::Ok msg;
+
+  EXPECT_EQ(msg.warning_count(), 0);
+  msg.warning_count(1);
+  EXPECT_EQ(msg.warning_count(), 1);
+}
+
+TEST(MessageServerOk, last_insert_id) {
+  classic_protocol::message::server::Ok msg;
+
+  EXPECT_EQ(msg.last_insert_id(), 0);
+  msg.last_insert_id(1);
+  EXPECT_EQ(msg.last_insert_id(), 1);
+}
+
+TEST(MessageServerOk, affected_rows) {
+  classic_protocol::message::server::Ok msg;
+
+  EXPECT_EQ(msg.affected_rows(), 0);
+  msg.affected_rows(1);
+  EXPECT_EQ(msg.affected_rows(), 1);
+}
+
+TEST(MessageServerOk, message) {
+  classic_protocol::message::server::Ok msg;
+
+  EXPECT_EQ(msg.message(), "");
+  msg.message("hi");
+  EXPECT_EQ(msg.message(), "hi");
+}
+
+TEST(MessageServerOk, session_changes) {
+  classic_protocol::message::server::Ok msg;
+
+  EXPECT_EQ(msg.session_changes(), "");
+  msg.session_changes("hi");
+  EXPECT_EQ(msg.session_changes(), "hi");
+}
 
 // server::Eof
 
@@ -338,6 +382,53 @@ INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageServerErrorTest,
                          [](auto const &test_param_info) {
                            return test_param_info.param.test_name;
                          });
+
+TEST(MessageServerError, default_constructed) {
+  classic_protocol::message::server::Error msg;
+
+  EXPECT_EQ(msg.error_code(), 0);
+  EXPECT_EQ(msg.message(), "");
+  EXPECT_EQ(msg.sql_state(), "");
+}
+
+TEST(MessageServerError, default_args_constructed) {
+  classic_protocol::message::server::Error msg(1234, "foo");
+
+  EXPECT_EQ(msg.error_code(), 1234);
+  EXPECT_EQ(msg.message(), "foo");
+  EXPECT_EQ(msg.sql_state(), "HY000");
+}
+
+TEST(MessageServerError, warning_count) {
+  classic_protocol::message::server::Error msg;
+
+  msg.error_code(123);
+  EXPECT_EQ(msg.error_code(), 123);
+}
+
+TEST(MessageServerError, message) {
+  classic_protocol::message::server::Error msg;
+
+  msg.message("foo");
+  EXPECT_EQ(msg.message(), "foo");
+}
+
+TEST(MessageServerError, sql_state) {
+  classic_protocol::message::server::Error msg;
+
+  msg.sql_state("HY000");
+  EXPECT_EQ(msg.sql_state(), "HY000");
+}
+
+TEST(MessageServerError, short_sql_state) {
+  std::array<uint8_t, 6> packet{
+      0xff, 0x12, 0x34, '#', 'F', 'O',
+  };
+  auto decode_res =
+      classic_protocol::Codec<classic_protocol::message::server::Error>::decode(
+          net::buffer(packet), {classic_protocol::capabilities::protocol_41});
+  ASSERT_FALSE(decode_res);
+}
 
 // server::Greeting
 
@@ -586,10 +677,7 @@ const CodecParam<classic_protocol::message::server::Row>
          {{"abc"s, "def"s}},
          {},
          {0x03, 'a', 'b', 'c', 0x03, 'd', 'e', 'f'}},
-        {"null_null",
-         {{stdx::make_unexpected(), stdx::make_unexpected()}},
-         {},
-         {0xfb, 0xfb}},
+        {"null_null", {{std::nullopt, std::nullopt}}, {}, {0xfb, 0xfb}},
 };
 
 INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageServerRowTest,
@@ -1058,7 +1146,7 @@ std::ostream &operator<<(std::ostream &os, const StmtExecute &v) {
   os << "  types: "
      << "\n";
   for (auto const &t : v.types()) {
-    os << "    - " << static_cast<uint16_t>(t) << "\n";
+    os << "    - " << t.type_and_flags << "\n";
   }
   os << "  values: "
      << "\n";
@@ -1080,7 +1168,11 @@ using CodecMessageClientStmtExecuteTest =
 
 TEST_P(CodecMessageClientStmtExecuteTest, encode) { test_encode(GetParam()); }
 TEST_P(CodecMessageClientStmtExecuteTest, decode) {
-  test_decode(GetParam(), [](uint32_t /* statement_id */) { return 1; });
+  test_decode(GetParam(), [](uint32_t /* statement_id */) {
+    // one param
+    return std::vector<
+        classic_protocol::message::client::StmtExecute::ParamDef>{{}};
+  });
 }
 
 const CodecParam<classic_protocol::message::client::StmtExecute>
@@ -1138,18 +1230,19 @@ INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageClientStmtResetTest,
 
 // client::StmtSetOption
 
-using CodecMessageClientStmtSetOptionTest =
-    CodecTest<classic_protocol::message::client::StmtSetOption>;
+using CodecMessageClientSetOptionTest =
+    CodecTest<classic_protocol::message::client::SetOption>;
 
-TEST_P(CodecMessageClientStmtSetOptionTest, encode) { test_encode(GetParam()); }
-TEST_P(CodecMessageClientStmtSetOptionTest, decode) { test_decode(GetParam()); }
+TEST_P(CodecMessageClientSetOptionTest, encode) { test_encode(GetParam()); }
+TEST_P(CodecMessageClientSetOptionTest, decode) { test_decode(GetParam()); }
 
-const CodecParam<classic_protocol::message::client::StmtSetOption>
+const CodecParam<classic_protocol::message::client::SetOption>
     codec_stmt_set_option_param[] = {
-        {"set_option_stmt_1", {1}, {}, {0x1b, 0x01, 0x00}},
+        {"set_option_0", {0}, {}, {0x1b, 0x00, 0x00}},  // multi-stmts-off
+        {"set_option_1", {1}, {}, {0x1b, 0x01, 0x00}},  // multi-stmts-on
 };
 
-INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageClientStmtSetOptionTest,
+INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageClientSetOptionTest,
                          ::testing::ValuesIn(codec_stmt_set_option_param),
                          [](auto const &test_param_info) {
                            return test_param_info.param.test_name;
@@ -1179,9 +1272,7 @@ INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageClientStmtFetchTest,
 
 // client::Greeting
 
-namespace classic_protocol {
-namespace message {
-namespace client {
+namespace classic_protocol::message::client {
 std::ostream &operator<<(std::ostream &os, const Greeting &v) {
   os << "Greeting: "
      << "\n";
@@ -1193,9 +1284,7 @@ std::ostream &operator<<(std::ostream &os, const Greeting &v) {
 
   return os;
 }
-}  // namespace client
-}  // namespace message
-}  // namespace classic_protocol
+}  // namespace classic_protocol::message::client
 
 using CodecMessageClientGreetingTest =
     CodecTest<classic_protocol::message::client::Greeting>;
@@ -1367,6 +1456,38 @@ const CodecParam<classic_protocol::message::client::Greeting>
                  0x00, 0x00, 0x00, 0x00,  //
                  0x00, 0x00, 0x00         //
              }},
+            {
+                "choma",
+                {
+                    0b1011'1010'0010'0000'1111,  // caps:
+                                                 // long-pass
+                                                 // found-rows
+                                                 // long-flag
+                                                 // connect-with-schema
+                                                 // protocol_41
+                                                 // transactions
+                                                 // secure_connections
+                                                 // plugin_auth (set, but then
+                                                 // not used)
+                    (1 << 24) - 1,               // max-packet-size
+                    0xff,                        // collation
+                    "myroot",                    // user
+                    "\x14\xa5\xed\xe0\xdf\x96\x9d\x5e"
+                    "\xca\xa3\x45\xc3\x93\x55\xfe\x22"
+                    "\x99\x62\xc9\xed",  // authdata
+                    "mysql",             // schema
+                    "",                  // authmethod
+                    {}                   // attributes
+                },                       // client::Greeting
+                0xffffffff,              // server-caps
+                {0x0f, 0xa2, 0x0b, 0x00, 0xff, 0xff, 0xff, 0x00, 0xff, 0x00,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                 0x00, 0x00, 0x6d, 0x79, 0x72, 0x6f, 0x6f, 0x74, 0x00, 0x14,
+                 0x14, 0xa5, 0xed, 0xe0, 0xdf, 0x96, 0x9d, 0x5e, 0xca, 0xa3,
+                 0x45, 0xc3, 0x93, 0x55, 0xfe, 0x22, 0x99, 0x62, 0xc9, 0xed,
+                 0x6d, 0x79, 0x73, 0x71, 0x6c, 0x00}  // bytes
+            },
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1378,9 +1499,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 // client::ChangeUser
 
-namespace classic_protocol {
-namespace message {
-namespace client {
+namespace classic_protocol::message::client {
 std::ostream &operator<<(std::ostream &os, const ChangeUser &v) {
   os << "ChangeUser: "
      << "\n";
@@ -1390,9 +1509,7 @@ std::ostream &operator<<(std::ostream &os, const ChangeUser &v) {
 
   return os;
 }
-}  // namespace client
-}  // namespace message
-}  // namespace classic_protocol
+}  // namespace classic_protocol::message::client
 
 using CodecMessageClientChangeUserTest =
     CodecTest<classic_protocol::message::client::ChangeUser>;
@@ -1537,7 +1654,7 @@ const CodecParam<classic_protocol::message::server::StmtRow>
          {},
          {0x00, 0x00, 0x06, 'f', 'o', 'o', 'b', 'a', 'r'}},
         {"null",
-         {{classic_protocol::field_type::VarString}, {stdx::make_unexpected()}},
+         {{classic_protocol::field_type::VarString}, {std::nullopt}},
          {},
          {0x00, 0x04}},
 };
@@ -1582,24 +1699,6 @@ INSTANTIATE_TEST_SUITE_P(Spec, CodecMessageServerStatisticsTest,
                          [](auto const &test_param_info) {
                            return test_param_info.param.test_name;
                          });
-
-TEST(ClassicProto, Decode_NulTermString_multiple_chunks) {
-  std::list<std::vector<uint8_t>> read_storage{{'8', '0'}, {'1', 0x00, 'f'}};
-  std::list<net::const_buffer> read_bufs;
-  for (auto const &b : read_storage) {
-    read_bufs.push_back(net::buffer(b));
-  }
-
-  const auto res =
-      classic_protocol::Codec<classic_protocol::wire::NulTermString>::decode(
-          read_bufs, {});
-
-  ASSERT_TRUE(res);
-
-  // the \0 is consumed too, but not part of the output
-  EXPECT_EQ(res->first, 3 + 1);
-  EXPECT_EQ(res->second.value(), "801");
-}
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);

@@ -1,4 +1,4 @@
-# Copyright (c) 2011, 2021, Oracle and/or its affiliates.
+# Copyright (c) 2011, 2023, Oracle and/or its affiliates.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -35,6 +35,7 @@ IF(WITH_INNODB_MEMCACHED AND UNIX)
   STRING_APPEND(CMAKE_C_FLAGS " -Wno-unused-parameter")
   STRING_APPEND(CMAKE_C_FLAGS " -Wno-unused-variable")
   STRING_APPEND(CMAKE_C_FLAGS " -Wno-vla")
+  STRING_APPEND(CMAKE_C_FLAGS " -Wno-deprecated-declarations")
 
   MY_CHECK_C_COMPILER_FLAG("-Wduplicate-decl-specifier"
     HAVE_DUPLICATE_DECL_SPECIFIER)
@@ -78,6 +79,8 @@ IF(WITH_INNODB_MEMCACHED AND UNIX)
   # -Werror=lto-type-mismatch for misc functions.
   REMOVE_CMAKE_COMPILER_FLAGS(CMAKE_C_FLAGS "${MY_COMPILER_FLAG_FLTO}")
   REMOVE_CMAKE_COMPILER_FLAGS(CMAKE_CXX_FLAGS "${MY_COMPILER_FLAG_FLTO}")
+
+  DISABLE_MISSING_PROFILE_WARNING()
 
   ADD_SUBDIRECTORY(innodb_memcache)
 

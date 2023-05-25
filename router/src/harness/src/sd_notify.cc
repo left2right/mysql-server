@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2020, 2021, Oracle and/or its affiliates.
+  Copyright (c) 2020, 2023, Oracle and/or its affiliates.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -35,7 +35,6 @@
 #define MYSQL_ROUTER_LOG_DOMAIN \
   ::mysql_harness::logging::kMainLogger  // must precede #include "logging.h"
 
-#include "common.h"
 #include "mysql/harness/logging/logging.h"
 #include "mysql/harness/net_ts/io_context.h"
 #include "mysql/harness/net_ts/local.h"
@@ -115,13 +114,7 @@ connect_to_notify_socket(net::io_context &io_ctx,
 
       // stay in the loop in case we got interrupted.
     } else {
-#if defined(__SUNPRO_CC)
-      // suncc needs a std::move(), while gcc complains about redundant
-      // std::move().
-      return std::move(sock);
-#else
       return sock;
-#endif
     }
   } while (true);
 }

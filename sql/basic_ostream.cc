@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -32,7 +32,7 @@ IO_CACHE_ostream::~IO_CACHE_ostream() { close(); }
 
 bool IO_CACHE_ostream::open(
 #ifdef HAVE_PSI_INTERFACE
-    PSI_file_key log_file_key MY_ATTRIBUTE((unused)),
+    PSI_file_key log_file_key [[maybe_unused]],
 #endif
     const char *file_name, myf flags) {
   File file = -1;

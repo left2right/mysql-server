@@ -65,6 +65,7 @@ INSERT INTO t1 VALUES (2);
 --let $_group_replication_local_address= `SELECT @@GLOBAL.group_replication_local_address`
 --let $_group_replication_group_seeds= `SELECT @@GLOBAL.group_replication_group_seeds`
 --let $_group_replication_start_on_boot= `SELECT @@GLOBAL.group_replication_start_on_boot`
+--let $_group_replication_comm_stack= `SELECT @@GLOBAL.group_replication_communication_stack`
 
 --let $plugin_list= $GROUP_REPLICATION
 --source include/spawn_monitoring_process.inc
@@ -77,6 +78,7 @@ INSERT INTO t1 VALUES (2);
 --eval SET PERSIST group_replication_group_name= "$group_replication_group_name"
 --eval SET PERSIST group_replication_local_address= "$_group_replication_local_address"
 --eval SET PERSIST group_replication_group_seeds= "$_group_replication_group_seeds"
+--eval SET PERSIST group_replication_communication_stack= "$_group_replication_comm_stack"
 
 SET PERSIST group_replication_start_on_boot= ON;
 --enable_query_log
@@ -157,6 +159,7 @@ RESET PERSIST IF EXISTS group_replication_group_name;
 RESET PERSIST IF EXISTS group_replication_local_address;
 RESET PERSIST IF EXISTS group_replication_group_seeds;
 RESET PERSIST IF EXISTS group_replication_start_on_boot;
+RESET PERSIST group_replication_communication_stack;
 
 --replace_result $_group_replication_start_on_boot START_ON_BOOT_VALUE
 --eval SET GLOBAL group_replication_start_on_boot= $_group_replication_start_on_boot
@@ -169,9 +172,9 @@ set session sql_log_bin=0;
 call mtr.add_suppression("Due to the number of missing transactions being higher than the configured threshold of*");
 call mtr.add_suppression("Clone removing all user data for provisioning: Started");
 call mtr.add_suppression("Clone removing all user data for provisioning: Finished");
-call mtr.add_suppression("Server was not able to find a rotate event from master server to initialize relay log recovery for channel ''. Skipping relay log recovery for the channel.");
-call mtr.add_suppression("Error during --relay-log-recovery: Could not locate rotate event from the master.");
-call mtr.add_suppression("Relay log information for channel '' was found after a clone operation. Relay log recovery");
+call mtr.add_suppression("Server was not able to find a rotate event from source server to initialize relay log recovery for channel ''. Skipping relay log recovery for the channel.");
+call mtr.add_suppression("Error during --relay-log-recovery: Could not locate rotate event from the source.");
+call mtr.add_suppression("Applier metadata information for channel '' was found after a clone operation. Relay log recovery");
 set session sql_log_bin=1;
 
 --source include/clean_monitoring_process.inc

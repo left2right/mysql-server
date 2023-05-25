@@ -1,4 +1,4 @@
-# Copyright (c) 2008, 2021, Oracle and/or its affiliates.
+# Copyright (c) 2008, 2023, Oracle and/or its affiliates.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -22,25 +22,11 @@
 
 INCLUDE(libutils)
 
+INCLUDE(ndb_downgrade_warnings)
+
 # Disable specific types of warnings for current directory
 # if the compiler supports the flag
 FOREACH(warning
-    "unused-but-set-variable"
-    "strict-aliasing"
-    "unused-parameter"
-    "cast-qual"
-    # Downgrade -Werror=format-overflow to warning
-    "error=format-overflow"
-    # Downgrade -Werror to warning for "may be used uninitialized"
-    "error=maybe-uninitialized"
-    # Downgrade -Werror=deprecated-copy to warning for gcc 9
-    "error=deprecated-copy"
-    # Downgrade -Werror=stringop-truncation to warning for gcc 8/9
-    "error=stringop-truncation"
-    # Downgrade -Werror=stringop-overflow to warning
-    "error=stringop-overflow"
-    # Downgrade -Werror=format-truncation to warning
-    "error=format-truncation"
     )
   MY_CHECK_CXX_COMPILER_WARNING("${warning}" HAS_WARN_FLAG)
   IF(HAS_WARN_FLAG)
@@ -49,48 +35,9 @@ FOREACH(warning
   ENDIF()
 ENDFOREACH()
 
-##################
-# Temporary C++ 8 workarounds:
-# (not supported for C, so only set CXX_FLAGS)
-FOREACH(warning
-    # Workaround for bug#28387760, also failed other places then in NdbEvent*
-    "class-memaccess"
-    )
-  MY_CHECK_CXX_COMPILER_WARNING("${warning}" HAS_WARN_FLAG)
-  IF(HAS_WARN_FLAG)
-    STRING_APPEND(CMAKE_CXX_FLAGS " ${HAS_WARN_FLAG}")
-  ENDIF()
-ENDFOREACH()
-
 ADD_SUBDIRECTORY(common)
 ADD_SUBDIRECTORY(mgmapi)
 ADD_SUBDIRECTORY(ndbapi)
-
-IF(NOT WITHOUT_SERVER)
-  ADD_SUBDIRECTORY(kernel)
-ENDIF()
-ADD_SUBDIRECTORY(mgmclient)
-ADD_SUBDIRECTORY(mgmsrv)
-
-IF(BUILD_IS_SINGLE_CONFIG)
-  SET(JAVA_SUBDIR)
-ELSE()
-  set(JAVA_SUBDIR
-  $<$<CONFIG:Debug>:Debug>$<$<CONFIG:RelWithDebInfo>:RelWithDebInfo>)
-ENDIF()
-
-IF(WIN32)
-  SET(JAVA_SEPARATOR ";")
-ELSE()
-  set(JAVA_SEPARATOR :)
-ENDIF()
-
-SET(NDBJTIE_LIB)
-IF(HAVE_JDK)
-  ADD_SUBDIRECTORY(ndbjtie)
-  SET(NDBJTIE_LIB ndbjtie)
-  ADD_DEFINITIONS(-DNDB_WITH_NDBJTIE)
-ENDIF()
 
 #
 # Build static ndbclient library
@@ -99,7 +46,6 @@ SET(LIBS_TO_MERGE
   mysys
   mytime
   ndbapi
-  ndbconf
   ndbgeneral
   ndblogger
   ndbmgmapi
@@ -114,23 +60,57 @@ SET(LIBS_TO_MERGE
 SET(LIBS_TO_LINK)
 
 IF(WITH_ZLIB STREQUAL "bundled")
-  LIST(APPEND LIBS_TO_MERGE ${ZLIB_LIBRARY})
+  LIST(APPEND LIBS_TO_MERGE zlib)
 ELSE()
-  LIST(APPEND LIBS_TO_LINK ${ZLIB_LIBRARY})
+  LIST(APPEND LIBS_TO_LINK ext::zlib)
 ENDIF()
 
 
 MESSAGE(STATUS "LIBS_TO_MERGE ${LIBS_TO_MERGE}")
 
+IF(NOT WITH_NDB)
+  SET(SKIP_INSTALL_NDBCLIENT_STATIC SKIP_INSTALL)
+ENDIF()
+
 MERGE_CONVENIENCE_LIBRARIES(ndbclient_static ${LIBS_TO_MERGE}
+  ${SKIP_INSTALL_NDBCLIENT_STATIC}
   COMPONENT Development
   LINK_LIBRARIES ${SSL_LIBRARIES} ${LIBS_TO_LINK}
   )
+
+IF(NOT WITH_NDB)
+  RETURN()
+ENDIF()
 
 # Build test program to check linking against ndclient_static
 ADD_EXECUTABLE(ndbclient_static_link_test ndbclient_link_test.cpp)
 SET_TARGET_PROPERTIES(ndbclient_static_link_test PROPERTIES ENABLE_EXPORTS TRUE)
 TARGET_LINK_LIBRARIES(ndbclient_static_link_test ndbclient_static)
+
+IF(NOT WITHOUT_SERVER)
+  ADD_SUBDIRECTORY(kernel)
+ENDIF()
+ADD_SUBDIRECTORY(mgmclient)
+ADD_SUBDIRECTORY(mgmsrv)
+
+IF(BUILD_IS_SINGLE_CONFIG)
+  SET(JAVA_SUBDIR)
+ELSE()
+  SET(JAVA_SUBDIR $<CONFIG>)
+ENDIF()
+
+IF(WIN32)
+  SET(JAVA_SEPARATOR ";")
+ELSE()
+  set(JAVA_SEPARATOR :)
+ENDIF()
+
+SET(NDBJTIE_LIB)
+IF(WITH_NDB_JAVA)
+  ADD_SUBDIRECTORY(ndbjtie)
+  SET(NDBJTIE_LIB ndbjtie)
+  ADD_DEFINITIONS(-DNDB_WITH_NDBJTIE)
+ENDIF()
 
 #
 # Build shared ndbclient library
@@ -178,44 +158,24 @@ ELSE()
 ENDIF()
 
 IF(NOT WIN32)
-  # Turn off cmake's transitive link behaviour so that the shared
-  # ndbclient library contains everything except functions from
-  # system libs
   SET(NDBCLIENT_SYSTEM_LIBS)
   FOREACH(lib ${NDBCLIENT_SO_LIBS})
-    SET(deps ${${lib}_LIB_DEPENDS})
-    FOREACH(dep_lib ${deps})
-    SET(ignore_dep_lib)
-
-      # The list of dependent libs contains keywords used for debug vs optimized
-      # builds, ignore them
-      IF(dep_lib MATCHES "general" OR
-         dep_lib MATCHES "debug" OR
-         dep_lib MATCHES "optimized")
-        # MESSAGE(STATUS "Ignoring keyword ${dep_lib}")
-        SET(ignore_dep_lib 1)
-      ENDIF()
-
-      # Ignore libs where location is known(this means it's built locally)
-      LIST(FIND KNOWN_CONVENIENCE_LIBRARIES ${dep_lib} FOUNDIT)
-      IF(FOUNDIT GREATER -1)
-        # MESSAGE(STATUS "Ignoring ${dep_lib} since location is known")
-        SET(ignore_dep_lib 1)
-      ENDIF()
-
-      IF(NOT ignore_dep_lib)
-        LIST(APPEND NDBCLIENT_SYSTEM_LIBS ${dep_lib})
-      ENDIF()
-
-    ENDFOREACH()
+    LIST(FIND KNOWN_CONVENIENCE_LIBRARIES ${lib} FOUNDIT)
+    IF(FOUNDIT LESS 0)
+      MESSAGE(STATUS "Known libs : ${KNOWN_CONVENIENCE_LIBRARIES}")
+      MESSAGE(FATAL_ERROR "Unknown static library ${lib} FOUNDIT ${FOUNDIT}")
+    ENDIF()
+    GET_DEPENDEND_OS_LIBS(${lib} LIB_OSLIBS)
+    IF(LIB_OSLIBS)
+      LIST(APPEND NDBCLIENT_SYSTEM_LIBS ${LIB_OSLIBS})
+    ENDIF()
   ENDFOREACH()
+
   IF(NDBCLIENT_SYSTEM_LIBS)
     LIST(REMOVE_DUPLICATES NDBCLIENT_SYSTEM_LIBS)
     MESSAGE(STATUS "System libs used by ndbclient_so: ${NDBCLIENT_SYSTEM_LIBS}")
     TARGET_LINK_LIBRARIES(ndbclient_so INTERFACE
       ${NDBCLIENT_SYSTEM_LIBS})
-  ELSE()
-    MESSAGE(STATUS "System libs used by ndbclient_so: [none]")
   ENDIF()
 
   # Prepend any special linker flags(like -m64) for shared library

@@ -1,4 +1,4 @@
-/* Copyright (c) 2020, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2020, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -26,8 +26,9 @@
 #include <sstream>  // std::ostringstream
 
 #include "my_dbug.h"
+#include "sql-common/json_dom.h"  // Json_wrapper
 #include "sql/current_thd.h"
-#include "sql/json_dom.h"  // Json_wrapper
+#include "sql/log.h"
 #include "sql/rpl_sys_key_access.h"
 #include "sql/sql_base.h"
 #include "sql/sql_class.h"
@@ -102,6 +103,7 @@ bool Rpl_sys_table_access::open(enum thr_lock_type lock_type) {
   assert(nullptr == m_thd);
   m_lock_type = lock_type;
   m_current_thd = current_thd;
+  m_error = false;
 
   THD *thd = nullptr;
   thd = new THD;
@@ -118,22 +120,22 @@ bool Rpl_sys_table_access::open(enum thr_lock_type lock_type) {
 
   // m_table_list[0] is m_schema_name.m_table_name
   // m_table_list[1] is m_schema_version_name.m_table_version_name
-  m_table_list = new TABLE_LIST[m_table_list_size];
+  m_table_list = new Table_ref[m_table_list_size];
 
-  TABLE_LIST *table_version = &m_table_list[m_table_version_index];
+  Table_ref *table_version = &m_table_list[m_table_version_index];
   *table_version =
-      TABLE_LIST(m_schema_version_name.c_str(), m_schema_version_name.length(),
-                 m_table_version_name.c_str(), m_table_version_name.length(),
-                 m_table_version_name.c_str(), m_lock_type);
-  table_version->open_strategy = TABLE_LIST::OPEN_IF_EXISTS;
+      Table_ref(m_schema_version_name.c_str(), m_schema_version_name.length(),
+                m_table_version_name.c_str(), m_table_version_name.length(),
+                m_table_version_name.c_str(), m_lock_type);
+  table_version->open_strategy = Table_ref::OPEN_IF_EXISTS;
   table_version->next_local = nullptr;
   table_version->next_global = nullptr;
 
-  TABLE_LIST *table_data = &m_table_list[m_table_data_index];
-  *table_data = TABLE_LIST(m_schema_name.c_str(), m_schema_name.length(),
-                           m_table_name.c_str(), m_table_name.length(),
-                           m_table_name.c_str(), m_lock_type);
-  table_data->open_strategy = TABLE_LIST::OPEN_IF_EXISTS;
+  Table_ref *table_data = &m_table_list[m_table_data_index];
+  *table_data = Table_ref(m_schema_name.c_str(), m_schema_name.length(),
+                          m_table_name.c_str(), m_table_name.length(),
+                          m_table_name.c_str(), m_lock_type);
+  table_data->open_strategy = Table_ref::OPEN_IF_EXISTS;
   table_data->next_local = table_version;
   table_data->next_global = table_version;
 
@@ -175,6 +177,7 @@ bool Rpl_sys_table_access::close(bool error, bool ignore_global_read_lock) {
   if (error || m_error) {
     trans_rollback_stmt(m_thd);
     trans_rollback(m_thd);
+    m_error = true;
   } else {
     m_error = trans_commit_stmt(m_thd, ignore_global_read_lock) ||
               trans_commit(m_thd, ignore_global_read_lock);
@@ -257,6 +260,29 @@ std::string Rpl_sys_table_access::get_field_error_msg(
   return str_stream.str();
 }
 
+bool Rpl_sys_table_access::delete_all_rows() {
+  bool error = false;
+
+  TABLE *table = get_table();
+  Rpl_sys_key_access key_access;
+  int key_error =
+      key_access.init(table, Rpl_sys_key_access::enum_key_type::INDEX_NEXT);
+  if (!key_error) {
+    do {
+      error |= (table->file->ha_delete_row(table->record[0]) != 0);
+      if (error) {
+        return true;
+      }
+    } while (!error && !key_access.next());
+  } else if (HA_ERR_END_OF_FILE == key_error) {
+    /* Table is already empty, nothing to delete. */
+  } else {
+    return true;
+  }
+
+  return key_access.deinit();
+}
+
 bool Rpl_sys_table_access::increment_version() {
   DBUG_TRACE;
   assert(m_lock_type >= TL_WRITE_ALLOW_WRITE);
@@ -289,14 +315,15 @@ bool Rpl_sys_table_access::increment_version() {
     error |= table_version->file->ha_write_row(table_version->record[0]);
   }
 
-  error |= key_access.deinit();
+  error |= (key_access.deinit() != 0);
 
   return error;
 }
 
-bool Rpl_sys_table_access::update_version(longlong version) {
+bool Rpl_sys_table_access::update_version(ulonglong version) {
   DBUG_TRACE;
   assert(m_lock_type >= TL_WRITE_ALLOW_WRITE);
+  assert(version > 0);
 
   TABLE *table_version = m_table_list[m_table_version_index].table;
   Field **fields = table_version->field;
@@ -321,12 +348,12 @@ bool Rpl_sys_table_access::update_version(longlong version) {
     error |= table_version->file->ha_write_row(table_version->record[0]);
   }
 
-  error |= key_access.deinit();
+  error |= (key_access.deinit() != 0);
 
   return error;
 }
 
-longlong Rpl_sys_table_access::get_version() {
+ulonglong Rpl_sys_table_access::get_version() {
   DBUG_TRACE;
   longlong version = 0;
 
@@ -346,4 +373,30 @@ longlong Rpl_sys_table_access::get_version() {
   key_access.deinit();
 
   return version;
+}
+
+bool Rpl_sys_table_access::delete_version() {
+  DBUG_TRACE;
+  assert(m_lock_type >= TL_WRITE_ALLOW_WRITE);
+
+  TABLE *table_version = m_table_list[m_table_version_index].table;
+  Field **fields = table_version->field;
+  fields[0]->set_notnull();
+  fields[0]->store(m_table_name.c_str(), m_table_name.length(),
+                   &my_charset_bin);
+
+  Rpl_sys_key_access key_access;
+  int error = key_access.init(table_version);
+
+  if (HA_ERR_KEY_NOT_FOUND == error) {
+    error = 0; /* purecov: inspected */
+  } else if (error) {
+    return true; /* purecov: inspected */
+  } else {
+    error |= table_version->file->ha_delete_row(table_version->record[0]);
+  }
+
+  error |= (key_access.deinit() != 0);
+
+  return error;
 }

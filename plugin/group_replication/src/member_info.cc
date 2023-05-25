@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2014, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -45,7 +45,7 @@ Group_member_info::Group_member_info(
     bool has_enforces_update_everywhere_checks, uint member_weight_arg,
     uint lower_case_table_names_arg, bool default_table_encryption_arg,
     const char *recovery_endpoints_arg, const char *view_change_uuid_arg,
-    PSI_mutex_key psi_mutex_key_arg)
+    bool allow_single_leader, PSI_mutex_key psi_mutex_key_arg)
     : Plugin_gcs_message(CT_MEMBER_INFO_MESSAGE),
       hostname(hostname_arg),
       port(port_arg),
@@ -66,6 +66,7 @@ Group_member_info::Group_member_info(
                                                 : "DEFAULT"),
       m_view_change_uuid(view_change_uuid_arg ? view_change_uuid_arg
                                               : "AUTOMATIC"),
+      m_allow_single_leader(allow_single_leader),
 #ifndef NDEBUG
       skip_encode_default_table_encryption(false),
       m_skip_encode_view_change_uuid(false),
@@ -106,6 +107,10 @@ Group_member_info::Group_member_info(Group_member_info &other)
       primary_election_running(other.is_primary_election_running()),
       recovery_endpoints(other.get_recovery_endpoints()),
       m_view_change_uuid(other.get_view_change_uuid()),
+      m_allow_single_leader(other.get_allow_single_leader()),
+      m_group_action_running_name(other.get_group_action_running_name()),
+      m_group_action_running_description(
+          other.get_group_action_running_description()),
 #ifndef NDEBUG
       skip_encode_default_table_encryption(false),
       m_skip_encode_view_change_uuid(false),
@@ -129,6 +134,7 @@ Group_member_info::Group_member_info(const uchar *data, size_t len,
       primary_election_running(false),
       recovery_endpoints("DEFAULT"),
       m_view_change_uuid("AUTOMATIC"),
+      m_allow_single_leader(false),
 #ifndef NDEBUG
       skip_encode_default_table_encryption(false),
       m_skip_encode_view_change_uuid(false),
@@ -154,7 +160,8 @@ void Group_member_info::update(
     Group_member_info::Group_member_role role_arg, bool in_single_primary_mode,
     bool has_enforces_update_everywhere_checks, uint member_weight_arg,
     uint lower_case_table_names_arg, bool default_table_encryption_arg,
-    const char *recovery_endpoints_arg, const char *view_change_uuid_arg) {
+    const char *recovery_endpoints_arg, const char *view_change_uuid_arg,
+    bool allow_single_leader) {
   MUTEX_LOCK(lock, &update_lock);
 
   hostname.assign(hostname_arg);
@@ -191,6 +198,7 @@ void Group_member_info::update(
   recovery_endpoints.assign(recovery_endpoints_arg);
 
   m_view_change_uuid.assign(view_change_uuid_arg);
+  m_allow_single_leader = allow_single_leader;
 }
 
 void Group_member_info::update(Group_member_info &other) {
@@ -207,7 +215,7 @@ void Group_member_info::update(Group_member_info &other) {
       other.get_member_weight(), other.get_lower_case_table_names(),
       other.get_default_table_encryption(),
       other.get_recovery_endpoints().c_str(),
-      other.get_view_change_uuid().c_str());
+      other.get_view_change_uuid().c_str(), other.get_allow_single_leader());
 }
 
 /*
@@ -310,6 +318,19 @@ void Group_member_info::encode_payload(
     encode_payload_item_string(buffer, PIT_VIEW_CHANGE_UUID,
                                m_view_change_uuid.c_str(),
                                m_view_change_uuid.length());
+
+  char allow_single_leader_aux = m_allow_single_leader ? '1' : '0';
+  encode_payload_item_char(buffer, PIT_ALLOW_SINGLE_LEADER,
+                           allow_single_leader_aux);
+
+  if (group_action_running) {
+    encode_payload_item_string(buffer, PIT_GROUP_ACTION_RUNNING_NAME,
+                               m_group_action_running_name.c_str(),
+                               m_group_action_running_name.length());
+    encode_payload_item_string(buffer, PIT_GROUP_ACTION_RUNNING_DESCRIPTION,
+                               m_group_action_running_description.c_str(),
+                               m_group_action_running_description.length());
+  }
 }
 
 void Group_member_info::decode_payload(const unsigned char *buffer,
@@ -454,6 +475,31 @@ void Group_member_info::decode_payload(const unsigned char *buffer,
         if (slider + payload_item_length <= end) {
           m_view_change_uuid.assign(reinterpret_cast<const char *>(slider),
                                     static_cast<size_t>(payload_item_length));
+          slider += payload_item_length;
+        }
+        break;
+
+      case PIT_ALLOW_SINGLE_LEADER:
+        if (slider + payload_item_length <= end) {
+          unsigned char allow_single_leader_aux = *slider;
+          slider += payload_item_length;
+          m_allow_single_leader =
+              (allow_single_leader_aux == '1') ? true : false;
+        }
+        break;
+      case PIT_GROUP_ACTION_RUNNING_NAME:
+        if (slider + payload_item_length <= end) {
+          m_group_action_running_name.assign(
+              reinterpret_cast<const char *>(slider),
+              static_cast<size_t>(payload_item_length));
+          slider += payload_item_length;
+        }
+        break;
+      case PIT_GROUP_ACTION_RUNNING_DESCRIPTION:
+        if (slider + payload_item_length <= end) {
+          m_group_action_running_description.assign(
+              reinterpret_cast<const char *>(slider),
+              static_cast<size_t>(payload_item_length));
           slider += payload_item_length;
         }
         break;
@@ -659,6 +705,24 @@ void Group_member_info::set_is_group_action_running(bool is_running) {
   group_action_running = is_running;
 }
 
+const std::string &Group_member_info::get_group_action_running_name() {
+  return m_group_action_running_name;
+}
+
+void Group_member_info::set_group_action_running_name(
+    const std::string &group_action_running_name) {
+  m_group_action_running_name = group_action_running_name;
+}
+
+const std::string &Group_member_info::get_group_action_running_description() {
+  return m_group_action_running_description;
+}
+
+void Group_member_info::set_group_action_running_description(
+    const std::string &group_action_running_description) {
+  m_group_action_running_description = group_action_running_description;
+}
+
 bool Group_member_info::is_primary_election_running() {
   MUTEX_LOCK(lock, &update_lock);
   return primary_election_running;
@@ -747,6 +811,11 @@ string Group_member_info::get_view_change_uuid() {
   return m_view_change_uuid;
 }
 
+bool Group_member_info::get_allow_single_leader() {
+  MUTEX_LOCK(lock, &update_lock);
+  return m_allow_single_leader;
+}
+
 void Group_member_info::set_view_change_uuid(const char *view_change_cnf) {
   MUTEX_LOCK(lock, &update_lock);
   m_view_change_uuid.assign(view_change_cnf);
@@ -790,7 +859,11 @@ bool Group_member_info::has_greater_weight(Group_member_info *other) {
 
 Group_member_info_manager::Group_member_info_manager(
     Group_member_info *local_member_info, PSI_mutex_key psi_mutex_key) {
-  members = new map<string, Group_member_info *>();
+  members = new std::map<
+      std::string, Group_member_info *, std::less<std::string>,
+      Malloc_allocator<std::pair<const std::string, Group_member_info *>>>(
+      Malloc_allocator<std::pair<const std::string, Group_member_info *>>(
+          key_group_member_info));
   this->local_member_info = local_member_info;
 
   mysql_mutex_init(psi_mutex_key, &update_lock, MY_MUTEX_INIT_FAST);
@@ -951,10 +1024,13 @@ Group_member_info_manager::get_group_member_status_by_member_id(
   return status;
 }
 
-vector<Group_member_info *> *Group_member_info_manager::get_all_members() {
+Group_member_info_list *Group_member_info_manager::get_all_members() {
   mysql_mutex_lock(&update_lock);
 
-  vector<Group_member_info *> *all_members = new vector<Group_member_info *>();
+  Group_member_info_list *all_members =
+      new std::vector<Group_member_info *,
+                      Malloc_allocator<Group_member_info *>>(
+          Malloc_allocator<Group_member_info *>(key_group_member_info));
   map<string, Group_member_info *>::iterator it;
   for (it = members->begin(); it != members->end(); it++) {
     Group_member_info *member_copy = new Group_member_info(*(*it).second);
@@ -1013,13 +1089,12 @@ void Group_member_info_manager::update(Group_member_info *update_local_member) {
   mysql_mutex_unlock(&update_lock);
 }
 
-void Group_member_info_manager::update(
-    std::vector<Group_member_info *> *new_members) {
+void Group_member_info_manager::update(Group_member_info_list *new_members) {
   mysql_mutex_lock(&update_lock);
 
   this->clear_members();
 
-  vector<Group_member_info *>::iterator new_members_it;
+  Group_member_info_list_iterator new_members_it;
   for (new_members_it = new_members->begin();
        new_members_it != new_members->end(); new_members_it++) {
     // If this bears the local member to be updated
@@ -1207,9 +1282,9 @@ void Group_member_info_manager::encode(vector<uchar> *to_encode) {
   delete group_info_message;
 }
 
-vector<Group_member_info *> *Group_member_info_manager::decode(
+Group_member_info_list *Group_member_info_manager::decode(
     const uchar *to_decode, size_t length) {
-  vector<Group_member_info *> *decoded_members = nullptr;
+  Group_member_info_list *decoded_members = nullptr;
 
   Group_member_info_manager_message *group_info_message =
       new Group_member_info_manager_message();
@@ -1340,7 +1415,9 @@ std::string Group_member_info_manager::get_string_current_view_active_hosts()
 Group_member_info_manager_message::Group_member_info_manager_message()
     : Plugin_gcs_message(CT_MEMBER_INFO_MANAGER_MESSAGE) {
   DBUG_TRACE;
-  members = new vector<Group_member_info *>();
+  members = new std::vector<Group_member_info *,
+                            Malloc_allocator<Group_member_info *>>(
+      Malloc_allocator<Group_member_info *>(key_group_member_info));
 }
 
 Group_member_info_manager_message::Group_member_info_manager_message(
@@ -1354,7 +1431,9 @@ Group_member_info_manager_message::Group_member_info_manager_message(
     Group_member_info *member_info)
     : Plugin_gcs_message(CT_MEMBER_INFO_MANAGER_MESSAGE), members(nullptr) {
   DBUG_TRACE;
-  members = new vector<Group_member_info *>();
+  members = new std::vector<Group_member_info *,
+                            Malloc_allocator<Group_member_info *>>(
+      Malloc_allocator<Group_member_info *>(key_group_member_info));
   members->push_back(member_info);
 }
 
@@ -1366,19 +1445,21 @@ Group_member_info_manager_message::~Group_member_info_manager_message() {
 
 void Group_member_info_manager_message::clear_members() {
   DBUG_TRACE;
-  std::vector<Group_member_info *>::iterator it;
+  Group_member_info_list_iterator it;
   for (it = members->begin(); it != members->end(); it++) {
     delete (*it);
   }
   members->clear();
 }
 
-std::vector<Group_member_info *>
-    *Group_member_info_manager_message::get_all_members() {
+Group_member_info_list *Group_member_info_manager_message::get_all_members() {
   DBUG_TRACE;
-  vector<Group_member_info *> *all_members = new vector<Group_member_info *>();
+  Group_member_info_list *all_members =
+      new std::vector<Group_member_info *,
+                      Malloc_allocator<Group_member_info *>>(
+          Malloc_allocator<Group_member_info *>(key_group_member_info));
 
-  std::vector<Group_member_info *>::iterator it;
+  Group_member_info_list_iterator it;
   for (it = members->begin(); it != members->end(); it++) {
     Group_member_info *member_copy = new Group_member_info(*(*it));
     all_members->push_back(member_copy);
@@ -1394,7 +1475,7 @@ void Group_member_info_manager_message::encode_payload(
   uint16 number_of_members = (uint16)members->size();
   encode_payload_item_int2(buffer, PIT_MEMBERS_NUMBER, number_of_members);
 
-  std::vector<Group_member_info *>::iterator it;
+  Group_member_info_list_iterator it;
   for (it = members->begin(); it != members->end(); it++) {
     std::vector<uchar> encoded_member;
     (*it)->encode(&encoded_member);
@@ -1446,11 +1527,9 @@ void Group_member_info_manager_message::
                  member_actions_serialized_configuration.end());
 }
 
-bool Group_member_info_manager_message::
-    get_member_actions_serialized_configuration(
-        const unsigned char *buffer, size_t length,
-        const unsigned char **member_actions_serialized_configuration,
-        size_t *member_actions_serialized_configuration_length) {
+bool Group_member_info_manager_message::get_pit_data(
+    const enum_payload_item_type pit, const unsigned char *buffer,
+    size_t length, const unsigned char **pit_data, size_t *pit_length) {
   DBUG_TRACE;
   const unsigned char *slider = buffer;
   const unsigned char *end = buffer + length;
@@ -1473,20 +1552,32 @@ bool Group_member_info_manager_message::
     decode_payload_item_type_and_length(&slider, &payload_item_type,
                                         &payload_item_length);
 
-    switch (payload_item_type) {
-      case PIT_MEMBER_ACTIONS:
-        if (slider + payload_item_length <= end) {
-          *member_actions_serialized_configuration = slider;
-          *member_actions_serialized_configuration_length = payload_item_length;
-          return false;
-        }
-        slider += payload_item_length;
-        break;
-      default:
-        slider += payload_item_length;
-        break;
+    if (pit == payload_item_type) {
+      if (slider + payload_item_length <= end) {
+        *pit_data = slider;
+        *pit_length = payload_item_length;
+        return false;
+      }
+      slider += payload_item_length;
+    } else {
+      slider += payload_item_length;
     }
   }
 
   return true;
+}
+
+void Group_member_info_manager_message::
+    add_replication_failover_channels_serialized_configuration(
+        std::vector<unsigned char> *buffer,
+        const std::string
+            &replication_failover_channels_serialized_configuration) const {
+  DBUG_TRACE;
+
+  encode_payload_item_type_and_length(
+      buffer, PIT_RPL_FAILOVER_CONFIGURATION,
+      replication_failover_channels_serialized_configuration.size());
+  buffer->insert(buffer->end(),
+                 replication_failover_channels_serialized_configuration.begin(),
+                 replication_failover_channels_serialized_configuration.end());
 }

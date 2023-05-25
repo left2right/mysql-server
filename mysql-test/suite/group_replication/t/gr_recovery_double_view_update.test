@@ -18,6 +18,7 @@
 --source include/big_test.inc
 --source include/have_debug.inc
 --source include/have_debug_sync.inc
+--source include/have_group_replication_xcom_communication_stack.inc
 --let $group_replication_group_name= 6749cab0-93ae-11e5-a837-0800200c9a66
 --source include/have_group_replication_plugin.inc
 --let $rpl_skip_group_replication_start= 1
@@ -58,7 +59,7 @@ CHANGE REPLICATION SOURCE TO SOURCE_PASSWORD='bad_password' FOR CHANNEL 'group_r
 
 set session sql_log_bin=0;
 call mtr.add_suppression("There was an error when connecting to the donor*");
-call mtr.add_suppression("For details please check performance_schema.replication_connection_status table and error log messages of Slave I/O for channel group_replication_recovery.");
+call mtr.add_suppression("For details please check performance_schema.replication_connection_status table and error log messages of Replica I/O for channel group_replication_recovery.");
 call mtr.add_suppression("Maximum number of retries when*");
 call mtr.add_suppression("Fatal error during the incremental recovery process of Group Replication.*");
 call mtr.add_suppression("The member is leaving a group without being on one");

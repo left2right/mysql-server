@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2023, Oracle and/or its affiliates.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License, version 2.0,
@@ -92,8 +92,7 @@ typedef bool (*validate_function)(IError_handler &handler, const char *arg,
   Check, whether the argument is not null pointer.
 */
 static bool not_null(IError_handler &handler, const char *arg,
-                     unsigned long length MY_ATTRIBUTE((unused)),
-                     size_t arg_pos) {
+                     unsigned long length [[maybe_unused]], size_t arg_pos) {
   if (arg == nullptr) {
     handler.error("Argument cannot be NULL [%d].", arg_pos);
     return false;
@@ -153,7 +152,7 @@ Arg_def audit_log_primary_args_def[] = {
     {audit_log_primary_args, array_elements(audit_log_primary_args)}};
 
 /**
-  Optional arguments defition (key, value).
+  Optional arguments definition (key, value).
 */
 Arg_def audit_log_extra_args_def[] = {
     {audit_log_key_value_string_args,
@@ -191,7 +190,7 @@ char *collation_name = const_cast<char *>(collation);
   @param [in, out]  args      UDF arguments structure
   @param [out]      handler   Error handler
 
-  @retval false Set the charset of all arguments successully
+  @retval false Set the charset of all arguments successfully
   @retval true  Otherwise
 */
 static bool set_args_charset_info(UDF_ARGS *args, IError_handler &handler) {
@@ -208,7 +207,7 @@ static bool set_args_charset_info(UDF_ARGS *args, IError_handler &handler) {
 }
 
 /**
-  Sets the charset info of the return value to utf8.
+  Sets the charset info of the return value to utf8mb4.
 
   @param [in, out]  initid    A pointer to the UDF_INIT structure
   @param [out]      handler   Error handler that keeps the error message
@@ -263,7 +262,7 @@ static int arg_check(IError_handler &handler, unsigned int arg_count,
       result = true;
 
   /*
-    At least one argument count was matched againts definition.
+    At least one argument count was matched against definition.
   */
   if (result == false) {
     handler.error("Invalid argument count.");
@@ -426,10 +425,10 @@ class String_error_handler : public IError_handler {
 /**
   UDF function itself.
 */
-static char *emit(UDF_INIT *initid MY_ATTRIBUTE((unused)), UDF_ARGS *args,
+static char *emit(UDF_INIT *initid [[maybe_unused]], UDF_ARGS *args,
                   char *result, unsigned long *length,
-                  unsigned char *null_value MY_ATTRIBUTE((unused)),
-                  unsigned char *error MY_ATTRIBUTE((unused))) {
+                  unsigned char *null_value [[maybe_unused]],
+                  unsigned char *error [[maybe_unused]]) {
   /*
     Store the error as the result of the UDF.
   */

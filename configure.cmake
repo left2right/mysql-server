@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2021, Oracle and/or its affiliates.
+# Copyright (c) 2009, 2023, Oracle and/or its affiliates.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -115,10 +115,9 @@ IF(UNIX)
 
   # https://bugs.llvm.org/show_bug.cgi?id=16404
   IF(LINUX AND HAVE_UBSAN AND MY_COMPILER_IS_CLANG)
-    SET(CMAKE_EXE_LINKER_FLAGS_DEBUG
-      "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -rtlib=compiler-rt -lgcc_s")
-    SET(CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO
-      "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} -rtlib=compiler-rt -lgcc_s")
+    STRING_APPEND(CMAKE_EXE_LINKER_FLAGS    " -rtlib=compiler-rt -lgcc_s")
+    STRING_APPEND(CMAKE_MODULE_LINKER_FLAGS " -rtlib=compiler-rt -lgcc_s")
+    STRING_APPEND(CMAKE_SHARED_LINKER_FLAGS " -rtlib=compiler-rt -lgcc_s")
   ENDIF()
 
   IF(WITH_ASAN)
@@ -614,6 +613,28 @@ int main(int ac, char **av)
 HAVE_INTEGER_PTHREAD_SELF
 FAIL_REGEX "warning: incompatible pointer to integer conversion"
 )
+
+# Check for pthread_setname_np() on linux
+CHECK_C_SOURCE_COMPILES("
+#define _GNU_SOURCE
+#include <pthread.h>
+int main(int argc, char **argv)
+{
+  pthread_t tid = 0;
+  const char *name = NULL;
+  return pthread_setname_np(tid, name);
+}"
+HAVE_PTHREAD_SETNAME_NP_LINUX)
+
+# Check for pthread_setname_np() on macos
+CHECK_C_SOURCE_COMPILES("
+#include <pthread.h>
+int main(int argc, char **argv)
+{
+  char name[16] = {0};
+  return pthread_setname_np(name);
+}"
+HAVE_PTHREAD_SETNAME_NP_MACOS)
 
 #--------------------------------------------------------------------
 # Check for IPv6 support

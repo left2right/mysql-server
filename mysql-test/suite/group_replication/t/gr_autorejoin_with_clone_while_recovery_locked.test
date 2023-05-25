@@ -92,6 +92,8 @@ SET sql_log_bin=1;
 --let $_group_replication_clone_threshold= `SELECT @@GLOBAL.group_replication_clone_threshold`
 --let $_group_replication_autorejoin_tries= `SELECT @@GLOBAL.group_replication_autorejoin_tries`
 --let $_group_replication_components_stop_timeout= `SELECT @@GLOBAL.group_replication_components_stop_timeout`
+--let $_group_replication_comm_stack= `SELECT @@GLOBAL.group_replication_communication_stack`
+
 
 --let $plugin_list= $GROUP_REPLICATION
 --source include/spawn_monitoring_process.inc
@@ -100,6 +102,7 @@ SET sql_log_bin=1;
 --eval SET PERSIST group_replication_group_name= "$group_replication_group_name"
 --eval SET PERSIST group_replication_local_address= "$_group_replication_local_address"
 --eval SET PERSIST group_replication_group_seeds= "$_group_replication_group_seeds"
+--eval SET PERSIST group_replication_communication_stack= "$_group_replication_comm_stack"
 --enable_query_log
 
 SET PERSIST group_replication_start_on_boot= ON;
@@ -272,6 +275,7 @@ RESET PERSIST group_replication_start_on_boot;
 RESET PERSIST group_replication_autorejoin_tries;
 RESET PERSIST group_replication_components_stop_timeout;
 RESET PERSIST local_infile;
+RESET PERSIST group_replication_communication_stack;
 
 --disable_query_log
 --eval SET GLOBAL group_replication_start_on_boot= $_group_replication_start_on_boot
@@ -289,9 +293,9 @@ call mtr.add_suppression("Error when stopping the group replication incremental 
 call mtr.add_suppression("This member will start distributed recovery using clone. It is due to the number of missing transactions being higher than the configured threshold of 1.");
 call mtr.add_suppression("Clone removing all user data for provisioning: Started");
 call mtr.add_suppression("Clone removing all user data for provisioning: Finished");
-call mtr.add_suppression("Relay log information for channel '' was found after a clone operation. Relay log recovery will be executed to adjust positions and file information for this new server.*");
-call mtr.add_suppression("Error during --relay-log-recovery: Could not locate rotate event from the master.");
-call mtr.add_suppression("Server was not able to find a rotate event from master server to initialize relay log recovery for channel ''. Skipping relay log recovery for the channel.");
+call mtr.add_suppression("Applier metadata information for channel '' was found after a clone operation. Relay log recovery will be executed to adjust positions and file information for this new server.*");
+call mtr.add_suppression("Error during --relay-log-recovery: Could not locate rotate event from the source.");
+call mtr.add_suppression("Server was not able to find a rotate event from source server to initialize relay log recovery for channel ''. Skipping relay log recovery for the channel.");
 SET sql_log_bin=1;
 
 RESET REPLICA ALL FOR CHANNEL "";

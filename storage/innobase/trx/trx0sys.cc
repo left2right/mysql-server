@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2021, Oracle and/or its affiliates.
+Copyright (c) 1996, 2023, Oracle and/or its affiliates.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -42,7 +42,6 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #ifndef UNIV_HOTBACKUP
 #include "fsp0fsp.h"
 #include "fsp0sysspace.h"
-#include "log0log.h"
 #include "log0recv.h"
 #include "mtr0log.h"
 #include "os0file.h"
@@ -58,8 +57,8 @@ this program; if not, write to the Free Software Foundation, Inc.,
 trx_sys_t *trx_sys = nullptr;
 
 /** Check whether transaction id is valid.
-@param[in]	id	transaction id to check
-@param[in]	name	table name */
+@param[in]      id      transaction id to check
+@param[in]      name    table name */
 void ReadView::check_trx_id_sanity(trx_id_t id, const table_name_t &name) {
   if (&name == &dict_sys->dynamic_metadata->name) {
     /* The table mysql.innodb_dynamic_metadata uses a
@@ -73,7 +72,8 @@ void ReadView::check_trx_id_sanity(trx_id_t id, const table_name_t &name) {
         << "A transaction id"
         << " in a record of table " << name << " is newer than the"
         << " system-wide maximum.";
-    ut_ad(0);
+    ut_d(ut_error);
+#ifndef UNIV_DEBUG
     THD *thd = current_thd;
     if (thd != nullptr) {
       char table_name[MAX_FULL_NAME_LEN + 1];
@@ -87,6 +87,7 @@ void ReadView::check_trx_id_sanity(trx_id_t id, const table_name_t &name) {
                           " maximum.",
                           table_name);
     }
+#endif
   }
 }
 
@@ -174,11 +175,11 @@ void trx_sys_get_binlog_prepared(std::vector<trx_id_t> &trx_ids) {
 }
 
 /** Read binary log positions from buffer passed.
-@param[in]	binlog_buf	binary log buffer from trx sys page
-@param[out]	file_name	binary log file name
-@param[out]	high		offset part high order bytes
-@param[out]	low		offset part low order bytes
-@return	true, if buffer has valid binary log position. */
+@param[in]      binlog_buf      binary log buffer from trx sys page
+@param[out]     file_name       binary log file name
+@param[out]     high            offset part high order bytes
+@param[out]     low             offset part low order bytes
+@return true, if buffer has valid binary log position. */
 static bool read_binlog_position(const byte *binlog_buf, const char *&file_name,
                                  uint32_t &high, uint32_t &low) {
   /* Initialize out parameters. */
@@ -203,10 +204,10 @@ static bool read_binlog_position(const byte *binlog_buf, const char *&file_name,
 }
 
 /** Write binary log position into passed buffer.
-@param[in]	file_name	Binary log file name
-@param[in]	offset		Binary log offset
-@param[out]	binlog_buf	Buffer from trx sys page to write to
-@param[in,out]	mtr		Mini-transaction */
+@param[in]      file_name       Binary log file name
+@param[in]      offset          Binary log offset
+@param[out]     binlog_buf      Buffer from trx sys page to write to
+@param[in,out]  mtr             Mini-transaction */
 static void write_binlog_position(const char *file_name, uint64_t offset,
                                   byte *binlog_buf, mtr_t *mtr) {
   if (file_name == nullptr ||
@@ -267,9 +268,9 @@ void trx_sys_read_binlog_position(char *file, uint64_t &offset) {
 }
 
 /** Check if binary log position is changed.
-@param[in]	file_name	previous binary log file name
-@param[in]	offset		previous binary log file offset
-@param[out]	binlog_buf	buffer from trx sys page to write to
+@param[in]      file_name       previous binary log file name
+@param[in]      offset          previous binary log file offset
+@param[out]     binlog_buf      buffer from trx sys page to write to
 @return true, iff binary log position is modified from previous position. */
 static bool binlog_position_changed(const char *file_name, uint64_t offset,
                                     byte *binlog_buf) {
@@ -327,7 +328,7 @@ void trx_sys_update_mysql_binlog_offset(trx_t *trx, mtr_t *mtr) {
 }
 
 /** Find the page number in the TRX_SYS page for a given slot/rseg_id
-@param[in]	rseg_id		slot number in the TRX_SYS page rseg array
+@param[in]      rseg_id         slot number in the TRX_SYS page rseg array
 @return page number from the TRX_SYS page rseg array */
 page_no_t trx_sysf_rseg_find_page_no(ulint rseg_id) {
   page_no_t page_no;
@@ -344,7 +345,7 @@ page_no_t trx_sysf_rseg_find_page_no(ulint rseg_id) {
 }
 
 /** Look for a free slot for a rollback segment in the trx system file copy.
-@param[in,out]	mtr		mtr
+@param[in,out]  mtr             mtr
 @return slot index or ULINT_UNDEFINED if not found */
 ulint trx_sysf_rseg_find_free(mtr_t *mtr) {
   trx_sysf_t *sys_header = trx_sysf_get(mtr);
@@ -407,7 +408,7 @@ static void trx_sysf_create(mtr_t *mtr) /*!< in: mtr */
   define TRX_SYS_N_RSEGS as 256 (TRX_SYS_OLD_N_RSEGS) and expect
   that the whole array is initialized. */
   ptr = TRX_SYS_RSEGS + sys_header;
-  len = ut_max(TRX_SYS_OLD_N_RSEGS, TRX_SYS_N_RSEGS) * TRX_SYS_RSEG_SLOT_SIZE;
+  len = std::max(TRX_SYS_OLD_N_RSEGS, TRX_SYS_N_RSEGS) * TRX_SYS_RSEG_SLOT_SIZE;
   memset(ptr, 0xff, len);
   ptr += len;
   ut_a(ptr <= page + (UNIV_PAGE_SIZE - FIL_PAGE_DATA_END));
@@ -435,13 +436,13 @@ const uint32_t max_rseg_init_threads = 4;
 purge_pq_t *trx_sys_init_at_db_start(void) {
   purge_pq_t *purge_queue;
   trx_sysf_t *sys_header;
-  ib_uint64_t rows_to_undo = 0;
+  uint64_t rows_to_undo = 0;
   const char *unit = "";
 
   /* We create the min binary heap here and pass ownership to
   purge when we init the purge sub-system. Purge is responsible
   for freeing the binary heap. */
-  purge_queue = UT_NEW_NOKEY(purge_pq_t());
+  purge_queue = ut::new_withkey<purge_pq_t>(UT_NEW_THIS_FILE_PSI_KEY);
   ut_a(purge_queue != nullptr);
 
   if (srv_force_recovery < SRV_FORCE_NO_UNDO_LOG_SCAN) {
@@ -467,8 +468,8 @@ purge_pq_t *trx_sys_init_at_db_start(void) {
     const auto time_diff =
         std::chrono::duration_cast<std::chrono::microseconds>(end - start)
             .count();
-    ib::info() << "Time taken to initialize rseg using "
-               << srv_rseg_init_threads << " thread: " << time_diff << " ms.";
+    ib::info(ER_IB_MSG_PAR_RSEG_INIT_TIME_MSG, srv_rseg_init_threads,
+             (uint32_t)time_diff);
   }
 
   mtr_t mtr;
@@ -497,8 +498,6 @@ purge_pq_t *trx_sys_init_at_db_start(void) {
                                    2 * trx_sys_get_trx_id_write_margin());
 
   trx_sys->serialisation_min_trx_no.store(trx_sys->next_trx_id_or_no.load());
-
-  trx_sys->rw_max_trx_id.store(trx_sys_get_next_trx_id_or_no() - 1);
 
   mtr.commit();
 
@@ -560,7 +559,8 @@ purge_pq_t *trx_sys_init_at_db_start(void) {
 void trx_sys_create(void) {
   ut_ad(trx_sys == nullptr);
 
-  trx_sys = static_cast<trx_sys_t *>(ut_zalloc_nokey(sizeof(*trx_sys)));
+  trx_sys = static_cast<trx_sys_t *>(
+      ut::zalloc_withkey(UT_NEW_THIS_FILE_PSI_KEY, sizeof(*trx_sys)));
 
   mutex_create(LATCH_ID_TRX_SYS, &trx_sys->mutex);
   mutex_create(LATCH_ID_TRX_SYS_SERIALISATION, &trx_sys->serialisation_mutex);
@@ -569,16 +569,14 @@ void trx_sys_create(void) {
   UT_LIST_INIT(trx_sys->rw_trx_list);
   UT_LIST_INIT(trx_sys->mysql_trx_list);
 
-  trx_sys->mvcc = UT_NEW_NOKEY(MVCC(1024));
+  trx_sys->mvcc = ut::new_withkey<MVCC>(UT_NEW_THIS_FILE_PSI_KEY, 1024);
 
   trx_sys->serialisation_min_trx_no.store(0);
-
-  trx_sys->min_active_trx_id.store(0);
 
   ut_d(trx_sys->rw_max_trx_no = 0);
 
   new (&trx_sys->rw_trx_ids)
-      trx_ids_t(ut_allocator<trx_id_t>(mem_key_trx_sys_t_rw_trx_ids));
+      trx_ids_t(ut::allocator<trx_id_t>(mem_key_trx_sys_t_rw_trx_ids));
 
   for (auto &shard : trx_sys->shards) {
     new (&shard) Trx_shard{};
@@ -639,7 +637,7 @@ void trx_sys_close(void) {
 
   trx_sys->tmp_rsegs.~Rsegs();
 
-  UT_DELETE(trx_sys->mvcc);
+  ut::delete_(trx_sys->mvcc);
 
   ut_a(UT_LIST_GET_LEN(trx_sys->rw_trx_list) == 0);
   ut_a(UT_LIST_GET_LEN(trx_sys->mysql_trx_list) == 0);
@@ -655,7 +653,7 @@ void trx_sys_close(void) {
 
   trx_sys->rw_trx_ids.~trx_ids_t();
 
-  ut_free(trx_sys);
+  ut::free(trx_sys);
 
   trx_sys = nullptr;
 }
@@ -763,7 +761,8 @@ Space_Ids *trx_sys_undo_spaces;
 
 /** Initialize trx_sys_undo_spaces, called once during srv_start(). */
 void trx_sys_undo_spaces_init() {
-  trx_sys_undo_spaces = UT_NEW(Space_Ids(), mem_key_undo_spaces);
+  trx_sys_undo_spaces =
+      ut::new_withkey<Space_Ids>(ut::make_psi_memory_key(mem_key_undo_spaces));
 
   trx_sys_undo_spaces->reserve(TRX_SYS_N_RSEGS);
 }
@@ -773,7 +772,7 @@ called once during thread de-initialization. */
 void trx_sys_undo_spaces_deinit() {
   if (trx_sys_undo_spaces != nullptr) {
     trx_sys_undo_spaces->clear();
-    UT_DELETE(trx_sys_undo_spaces);
+    ut::delete_(trx_sys_undo_spaces);
     trx_sys_undo_spaces = nullptr;
   }
 }

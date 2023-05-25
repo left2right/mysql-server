@@ -1,4 +1,4 @@
-/* Copyright (c) 2020, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2020, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -34,41 +34,37 @@
 
   It is intended to eventually take over completely from the older join
   optimizer based on prefix search (sql_planner.cc and related code),
-  but is currently in early alpha stage with a very simplistic cost model
-  and a large number of limitations: The most notable ones are that
-  we do not support:
+  and is nearly feature complete, but is currently in the early stages
+  with a very simplistic cost model and certain limitations.
+  The most notable ones are that we do not support:
 
-    - Some SQL features: recursive CTE, window functions.
     - Hints (except STRAIGHT_JOIN).
     - TRADITIONAL and JSON formats for EXPLAIN (use FORMAT=tree).
-
-  For unsupported queries, we will return an error; every valid SQL
-  query should either give such an error a correct result set.
+    - UPDATE.
 
   There are also have many optimization features it does not yet support;
   among them:
 
-    - Multiple equalities; they are simplified to simple equalities
-      before optimization (so some legal join orderings will be missed).
     - Aggregation through a temporary table.
-    - Queries with a very large amount of possible orderings, e.g. 30-way
-      star joins. (Less extreme queries, such as 30-way chain joins,
-      will be fine.) They will receive a similar error message as with
-      unsupported SQL features, instead of timing out.
+    - Some range optimizer features (notably MIN/MAX optimization).
+    - Materialization of arbitrary access paths (note that nested loop
+      joins against these can enable a limited form of hash join
+      that preserves ordering on the left side).
  */
 
 #include <string>
 
-struct AccessPath;
-class THD;
 class Query_block;
+class THD;
+struct AccessPath;
+struct JoinHypergraph;
 
 /**
   The main entry point for the hypergraph join optimizer; takes in a query
   block and returns an access path to execute it (or nullptr, for error).
   It works as follows:
 
-    1. Convert the query block from MySQL's TABLE_LIST structures into
+    1. Convert the query block from MySQL's Table_ref structures into
        a hypergraph (see make_join_hypergraph.h).
     2. Find all legal subplans in the hypergraph, calculate costs for
        them and create access paths -- if there are multiple ways to make a
@@ -128,6 +124,14 @@ class Query_block;
   materialize a subquery, though it may be suboptimal.
 
 
+  Note that the access path returned by FindBestQueryPlan() is not ready
+  for immediate conversion to iterators; see FinalizePlanForQueryBlock().
+  You may call FindBestQueryPlan() any number of times for a query block,
+  but FinalizePlanForQueryBlock() only once, as finalization generates
+  temporary tables and may rewrite expressions in ways that are incompatible
+  with future planning. The difference is most striking with the planning
+  done twice by in2exists (see above).
+
   @param thd Thread handle.
   @param query_block The query block to find a plan for.
   @param trace If not nullptr, will be filled with human-readable optimizer
@@ -136,7 +140,14 @@ class Query_block;
 AccessPath *FindBestQueryPlan(THD *thd, Query_block *query_block,
                               std::string *trace);
 
+// See comment in .cc file.
+bool FinalizePlanForQueryBlock(THD *thd, Query_block *query_block);
+
+// Exposed for unit testing only.
+void FindSargablePredicates(THD *thd, std::string *trace,
+                            JoinHypergraph *graph);
+
 void EstimateAggregateCost(AccessPath *path);
-void EstimateMaterializeCost(AccessPath *path);
+void EstimateMaterializeCost(THD *thd, AccessPath *path);
 
 #endif  // SQL_JOIN_OPTIMIZER_JOIN_OPTIMIZER_H

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2016, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -124,10 +124,9 @@ mysql_declare_plugin(test_udf_services){
   @retval     false     success
   @retval     true      Failure. Error in the message argument
 */
-PLUGIN_EXPORT bool test_udf_services_udf_init(
-    UDF_INIT *initid MY_ATTRIBUTE((unused)),
-    UDF_ARGS *args MY_ATTRIBUTE((unused)),
-    char *message MY_ATTRIBUTE((unused))) {
+PLUGIN_EXPORT bool test_udf_services_udf_init(UDF_INIT *initid [[maybe_unused]],
+                                              UDF_ARGS *args [[maybe_unused]],
+                                              char *message [[maybe_unused]]) {
   return false;
 }
 
@@ -139,11 +138,12 @@ PLUGIN_EXPORT bool test_udf_services_udf_init(
   @param[out] is_null   If the result is null, store 1 here
   @param[out] error     On error store 1 here
 */
-PLUGIN_EXPORT longlong
-test_udf_services_udf(UDF_INIT *initid MY_ATTRIBUTE((unused)),
-                      UDF_ARGS *args MY_ATTRIBUTE((unused)),
-                      unsigned char *is_null MY_ATTRIBUTE((unused)),
-                      unsigned char *error MY_ATTRIBUTE((unused))) {
+PLUGIN_EXPORT longlong test_udf_services_udf(UDF_INIT *initid [[maybe_unused]],
+                                             UDF_ARGS *args [[maybe_unused]],
+                                             unsigned char *is_null
+                                             [[maybe_unused]],
+                                             unsigned char *error
+                                             [[maybe_unused]]) {
   char buffer[10];
   *is_null = 0;
   *error = 0;

@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2019, 2021, Oracle and/or its affiliates.
+  Copyright (c) 2019, 2023, Oracle and/or its affiliates.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -30,6 +30,7 @@
 #include <limits>     // std::numeric_limits
 #include <stdexcept>  // length_error
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -38,6 +39,7 @@
 #include "mysql/harness/net_ts/executor.h"               // async_completion
 #include "mysql/harness/net_ts/impl/socket_constants.h"  // wait_write
 #include "mysql/harness/stdx/expected.h"
+#include "mysql/harness/stdx/span.h"
 
 namespace net {
 
@@ -69,6 +71,28 @@ inline const std::error_category &stream_category() noexcept {
           return "unknown";
       }
     }
+
+    bool equivalent(int mycode,
+                    const std::error_condition &other) const noexcept override {
+      if (*this == other.category() ||
+          std::string_view(name()) ==
+              std::string_view(other.category().name())) {
+        return mycode == other.value();
+      }
+
+      return false;
+    }
+
+    bool equivalent(const std::error_code &other,
+                    int mycode) const noexcept override {
+      if (*this == other.category() ||
+          std::string_view(name()) ==
+              std::string_view(other.category().name())) {
+        return mycode == other.value();
+      }
+
+      return false;
+    }
   };
 
   static stream_category_impl instance;
@@ -76,6 +100,10 @@ inline const std::error_category &stream_category() noexcept {
 }
 
 inline std::error_code make_error_code(net::stream_errc e) noexcept {
+  return {static_cast<int>(e), net::stream_category()};
+}
+
+inline std::error_condition make_error_condition(net::stream_errc e) noexcept {
   return {static_cast<int>(e), net::stream_category()};
 }
 
@@ -198,7 +226,7 @@ template <class T, class BufferType,
               std::declval<typename std::add_lvalue_reference<T>::type>()))>
 using buffer_sequence_requirements = std::integral_constant<
     bool,
-    stdx::conjunction<
+    std::conjunction<
         // check if buffer_sequence_begin(T &) and buffer_sequence_end(T &)
         // exist and return the same type
         std::is_same<Begin, End>,
@@ -212,7 +240,7 @@ struct is_buffer_sequence : std::false_type {};
 
 template <class T, class BufferType>
 struct is_buffer_sequence<
-    T, BufferType, stdx::void_t<buffer_sequence_requirements<T, BufferType>>>
+    T, BufferType, std::void_t<buffer_sequence_requirements<T, BufferType>>>
     : std::true_type {};
 
 template <class T>
@@ -246,7 +274,7 @@ struct is_dynamic_buffer : std::false_type {};
 template <class T, class U = std::remove_const_t<T>>
 auto dynamic_buffer_requirements(U *__x = nullptr, const U *__const_x = nullptr,
                                  size_t __n = 0)
-    -> std::enable_if_t<stdx::conjunction<
+    -> std::enable_if_t<std::conjunction<
         // is copy constructible
         std::is_copy_constructible<U>,
         // has a const_buffers_type that's a const_buffer_sequence
@@ -314,7 +342,7 @@ inline size_t buffer_size<mutable_buffer>(const mutable_buffer &b) noexcept {
  * @param dest buffer-sequence to copy to
  * @param src buffer-sequence to copy from
  * @param max_size max bytes to copy
- * @return bytes transfered from src to dest
+ * @return bytes transferred from src to dest
  *
  * see: 16.9 [buffer.copy]
  */
@@ -462,7 +490,18 @@ inline const_buffer buffer(
                       : impl::to_const_buffer(&data.front(), data.size());
 }
 
-// TODO(jkneschk): from-string-view
+template <class CharT, class Traits>
+inline const_buffer buffer(
+    const std::basic_string_view<CharT, Traits> &data) noexcept {
+  return data.empty() ? const_buffer{}
+                      : impl::to_const_buffer(data.data(), data.size());
+}
+
+template <class T, std::size_t E>
+inline const_buffer buffer(const stdx::span<T, E> &data) noexcept {
+  return data.empty() ? const_buffer{}
+                      : impl::to_const_buffer(data.data(), data.size());
+}
 
 template <class T, size_t N>
 inline mutable_buffer buffer(T (&data)[N], size_t n) noexcept {
@@ -511,6 +550,11 @@ template <class CharT, class Traits, class Allocator>
 inline const_buffer buffer(
     const std::basic_string<CharT, Traits, Allocator> &data,
     size_t n) noexcept {
+  return buffer(buffer(data), n);
+}
+
+template <class T, std::size_t E>
+inline const_buffer buffer(const stdx::span<T, E> &data, size_t n) noexcept {
   return buffer(buffer(data), n);
 }
 
@@ -674,8 +718,8 @@ class transfer_exactly {
    * @returns bytes to transfer
    */
   size_t operator()(const std::error_code &ec, size_t n) const {
-    // "unspecificed non-zero number"
-    size_t N = std::numeric_limits<size_t>::max();
+    // "unspecified non-zero number"
+    constexpr size_t N = std::numeric_limits<size_t>::max();
 
     if (!ec && n < exact_) return std::min(exact_ - n, N);
 
@@ -858,8 +902,11 @@ read(SyncReadStream &stream, DynamicBuffer &&b, CompletionCondition cond) {
 
       // if socket was non-blocking and some bytes where already read, return
       // the success
-      if ((res.error() == std::errc::resource_unavailable_try_again ||
-           res.error() == net::stream_errc::eof) &&
+      const auto ec = res.error();
+      if ((ec == make_error_condition(
+                     std::errc::resource_unavailable_try_again) ||
+           ec == make_error_condition(std::errc::operation_would_block) ||
+           ec == net::stream_errc::eof) &&
           transferred != 0) {
         return transferred;
       }

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -375,7 +375,7 @@ private:
       Found = 3,                // return current as next scan result
       Blocked = 4,              // found and waiting for ACC lock
       Locked = 5,               // found and locked or no lock needed
-      Next = 6,                 // looking for next extry
+      Next = 6,                 // looking for next entry
       Last = 7,                 // after last entry
       Aborting = 8
     };
@@ -736,7 +736,7 @@ private:
   void linkScan(NodeHandle& node, ScanOpPtr scanPtr, Uint32 scanInstance);
   void unlinkScan(NodeHandle& node, ScanOpPtr scanPtr, Uint32 scanInstance);
   bool islinkScan(NodeHandle& node, ScanOpPtr scanPtr, Uint32 scanInstance);
-  void relinkScan(ScanOp&, Frag&, bool need_lock = true, Uint32 line = 0);
+  void relinkScan(ScanOp&, Uint32 scanInstance, Frag&, bool need_lock = true, Uint32 line = 0);
 
   /*
    * DbtuxTree.cpp
@@ -830,9 +830,6 @@ private:
                            Dbtux *tux_block);
   void prepare_move_scan_ctx(ScanOpPtr scanPtr, Dbtux *tux_block);
 
-  /*
-   * DbtuxCmp.cpp
-   */
   int cmpSearchKey(TuxCtx&, const KeyDataC& searchKey, const KeyDataC& entryKey, Uint32 cnt);
   int cmpSearchBound(TuxCtx&, const KeyBoundC& searchBound, const KeyDataC& entryKey, Uint32 cnt);
 
@@ -962,6 +959,38 @@ private:
 #ifdef VM_TRACE
     char* c_debugBuffer;
 #endif
+    // function for clearing context
+    void reset()
+    {
+      // jamBuffer left
+      scanPtr.i = RNIL;
+      scanPtr.p = nullptr;
+      fragPtr.i = RNIL;
+      fragPtr.p = nullptr;
+      indexPtr.i = RNIL;
+      indexPtr.p = nullptr;
+      tupIndexFragPtr = nullptr;
+      tupIndexTablePtr = nullptr;
+      tupRealFragPtr = nullptr;
+      tupRealTablePtr = nullptr;
+      attrDataOffset = 0;
+      tuxFixHeaderSize = 0;
+      // searchScanDataArray left
+      // searchScanBoundArray left
+      keyAttrs = nullptr;
+      // searchKeyDataArray left
+      // searchKeyBoundArray left
+      scanBoundCnt = 0;
+      descending = 0;
+      m_current_ent.m_tupLoc = NullTupLoc;
+      m_current_ent.m_tupVersion = 0;
+      // c_searchKey left
+      // c_nextKey left
+      // c_entryKey left
+      // c_dataBuffer left
+      // c_boundBuffer left
+      // c_debugBuffer left
+    }
   };
 
   struct TuxCtx c_ctx; // Global Tux context, for everything build MT-index build
@@ -1012,6 +1041,7 @@ private:
   Uint32 get_my_scan_instance();
   Uint32 get_block_from_scan_instance(Uint32);
   Uint32 get_instance_from_scan_instance(Uint32);
+  bool checkScanInstance(Uint32 scanInstance);
 public:
   static Uint64 getTransactionMemoryNeed(
     const Uint32 ldm_instance_count,
@@ -1680,8 +1710,6 @@ Dbtux::max(unsigned x, unsigned y)
   return x > y ? x : y;
 }
 
-// DbtuxCmp.cpp
-
 /**
  * Can be called from MT-build of ordered indexes,
  * but it doesn't make use of the MT-context other
@@ -1742,12 +1770,10 @@ inline
 void
 Dbtux::relinkScan(Uint32 line)
 {
-  if (c_ctx.scanPtr.p != nullptr)
-  {
-    ScanOp& scan = *c_ctx.scanPtr.p;
-    Frag& frag = *c_ctx.fragPtr.p;
-    relinkScan(scan, frag, true, line);
-  }
+  ndbrequire(c_ctx.scanPtr.p != nullptr);
+  ScanOp& scan = *c_ctx.scanPtr.p;
+  Frag& frag = *c_ctx.fragPtr.p;
+  relinkScan(scan, m_my_scan_instance, frag, true, line);
 }
 #undef JAM_FILE_ID
 

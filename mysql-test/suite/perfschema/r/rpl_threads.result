@@ -1,7 +1,7 @@
 include/master-slave.inc
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection master]
 drop table if exists test.t1;
 reset master;
@@ -88,7 +88,7 @@ IF (VARIABLE_VALUE = @slave_sql_pid, "same", "different") as 'test'
   from performance_schema.variables_by_thread
 where VARIABLE_NAME = 'pseudo_thread_id' and THREAD_ID = @slave_sql_tid;
 VARIABLE_NAME	test
-pseudo_thread_id	different
+pseudo_thread_id	same
 select VARIABLE_NAME, VARIABLE_VALUE
 from performance_schema.status_by_thread
 where VARIABLE_NAME = 'Compression_level' and THREAD_ID = @slave_sql_tid;

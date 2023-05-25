@@ -1,4 +1,4 @@
-# Copyright (c) 2021, Oracle and/or its affiliates.
+# Copyright (c) 2021, 2023, Oracle and/or its affiliates.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -33,12 +33,13 @@ IF(NOT WITH_AUTHENTICATION_CLIENT_PLUGINS)
   RETURN()
 ENDIF()
 
-MESSAGE(STATUS "GSSAPI_LIBRARIES  ${GSSAPI_LIBRARIES}")
-MESSAGE(STATUS "KERBEROS_LIBRARIES  ${KERBEROS_LIBRARIES}")
-MESSAGE(STATUS "GSSAPI_INCLUDE_DIR  ${GSSAPI_INCLUDE_DIR}")
-MESSAGE(STATUS "KERBEROS_INCLUDE_DIR  ${KERBEROS_INCLUDE_DIR}")
+IF(KERBEROS_LIB_SSPI)
+  MESSAGE(STATUS "Building KERBEROS client authentication plug-in for windows.")
+ELSE()
+  MESSAGE(STATUS "Building KERBEROS client authentication plug-in for linux.")
+ENDIF()
 
-IF(KERBEROS_INCLUDE_DIR AND GSSAPI_INCLUDE_DIR)
+IF((KERBEROS_INCLUDE_DIR AND GSSAPI_INCLUDE_DIR))
   IF(NOT WITH_KERBEROS STREQUAL "system")
     IF(KERBEROS_INCLUDE_DIR)
       INCLUDE_DIRECTORIES(BEFORE SYSTEM ${KERBEROS_INCLUDE_DIR})
@@ -47,32 +48,47 @@ IF(KERBEROS_INCLUDE_DIR AND GSSAPI_INCLUDE_DIR)
       INCLUDE_DIRECTORIES(BEFORE SYSTEM ${GSSAPI_INCLUDE_DIR})
     ENDIF()
   ENDIF()
-  SET(MY_SQL "mysqlclient")
+  SET(AUTH_CLIENT "gssapi_authentication_client.cc")
+  SET(UTILITY "gssapi_utility.cc")
+  SET(CORE "kerberos_core.cc")
+  SET(KERBEROS_LIB ${GSSAPI_LIBRARIES})
+  LIST(APPEND KERBEROS_LIB ${KERBEROS_LIBRARIES})
+  MESSAGE(STATUS "Using Kerberos libraries: ${KERBEROS_LIB}")
 ELSE()
   MESSAGE(WARNING
     "Skipping the KERBEROS client authentication plugin.")
   RETURN()
 ENDIF()
 
+IF(KERBEROS_LIB_SSPI)
+  LIST(APPEND AUTH_CLIENT "sspi_authentication_client.cc")
+  LIST(APPEND UTILITY "sspi_utility.cc")
+ENDIF()
+
+SET(MY_SQL "mysqlclient")
+
+DISABLE_MISSING_PROFILE_WARNING()
+
 MYSQL_ADD_PLUGIN(authentication_kerberos_client
+  kerberos_client_interface.cc
   auth_kerberos_client_plugin.cc
-  gssapi_authentication_client.cc
-  gssapi_utility.cc
   auth_kerberos_client_io.cc
-  kerberos_client.cc
-  kerberos_core.cc
   log_client.cc
+  ${AUTH_CLIENT}
+  ${CORE}
+  ${UTILITY}
   LINK_LIBRARIES
-  # Uncomment to verify that all symbols are found.
-  # ${LINK_FLAG_NO_UNDEFINED}
-  ${GSSAPI_LIBRARIES}
-  ${KERBEROS_LIBRARIES}
+  ${KERBEROS_LIB}
   ${SSL_LIBRARIES}
   ${LIBDL}
   ${MY_SQL}
   CLIENT_ONLY
   MODULE_ONLY
   MODULE_OUTPUT_NAME "authentication_kerberos_client")
+
+IF(KERBEROS_LIB_SSPI)
+  ADD_DEPENDENCIES(authentication_kerberos_client copy_kerberos_dlls)
+ENDIF()
 
 # MYSQL_ADD_PLUGIN may have decided not to build it.
 IF(NOT TARGET authentication_kerberos_client)

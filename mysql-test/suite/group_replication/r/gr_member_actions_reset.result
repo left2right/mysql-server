@@ -1,7 +1,7 @@
 include/group_replication.inc
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection server1]
 
 ############################################################
@@ -29,8 +29,9 @@ include/stop_group_replication.inc
 SELECT group_replication_reset_member_actions();
 group_replication_reset_member_actions()
 OK
-include/assert.inc [There must be one member action]
+include/assert.inc [There must be two member actions]
 include/assert.inc [mysql_disable_super_read_only_if_primary action default value]
+include/assert.inc [mysql_start_failover_channels_if_primary action default value]
 include/assert.inc [There must be one GR configuration version]
 include/assert.inc [The version of replication_group_member_actions must be 1]
 include/assert_grep.inc [Member actions configuration was reset.]

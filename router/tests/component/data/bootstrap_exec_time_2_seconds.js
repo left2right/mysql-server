@@ -2,9 +2,8 @@ var common_stmts = require("common_statements");
 
 var options = {
   cluster_type: "gr",
+  gr_id: mysqld.global.gr_id,
   innodb_cluster_name: "mycluster",
-  innodb_cluster_instances:
-      [["localhost", 5500], ["localhost", 5510], ["localhost", 5520]],
 };
 
 var common_responses = common_stmts.prepare_statement_responses(
@@ -20,10 +19,11 @@ var common_responses = common_stmts.prepare_statement_responses(
       "router_select_members_count",
       "router_select_replication_group_name",
       "router_show_cipher_status",
-      "router_select_cluster_instances_v2",
+      "router_select_cluster_instances_v2_gr",
       "router_select_cluster_instance_addresses_v2",
       "router_start_transaction",
       "router_commit",
+      "router_clusterset_present",
     ],
     options);
 
@@ -39,16 +39,23 @@ var common_responses_regex = common_stmts.prepare_statement_responses_regex(
       "router_grant_on_routers",
       "router_grant_on_v2_routers",
       "router_update_routers_in_metadata",
+      "router_update_router_options_in_metadata",
     ],
     options);
 
+if (mysqld.global.blocked === undefined) {
+  mysqld.global.blocked = 0;
+}
+
 ({
   stmts: function(stmt) {
+    mysqld.global.blocked = 0;
     var res;
     if (common_responses.hasOwnProperty(stmt)) {
       return common_responses[stmt];
     }
     if (stmt === router_select_schema_version.stmt) {
+      mysqld.global.blocked = 1;
       router_select_schema_version.exec_time = 2000.0;
       return router_select_schema_version;
     } else if (

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2016, 2023, Oracle and/or its affiliates.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -55,8 +55,8 @@ Plugin_table table_ees_global_by_error::m_table_def(
     "  SQL_STATE VARCHAR(5),\n"
     "  SUM_ERROR_RAISED  BIGINT unsigned not null,\n"
     "  SUM_ERROR_HANDLED BIGINT unsigned not null,\n"
-    "  FIRST_SEEN TIMESTAMP(0) null default 0,\n"
-    "  LAST_SEEN TIMESTAMP(0) null default 0,\n"
+    "  FIRST_SEEN TIMESTAMP(0) null,\n"
+    "  LAST_SEEN TIMESTAMP(0) null,\n"
     "  UNIQUE KEY (ERROR_NUMBER) USING HASH\n",
     /* Options */
     " ENGINE=PERFORMANCE_SCHEMA",
@@ -91,7 +91,7 @@ PFS_engine_table *table_ees_global_by_error::create(PFS_engine_table_share *) {
   return new table_ees_global_by_error();
 }
 
-int table_ees_global_by_error::delete_all_rows(void) {
+int table_ees_global_by_error::delete_all_rows() {
   reset_events_errors_by_thread();
   reset_events_errors_by_account();
   reset_events_errors_by_user();
@@ -100,21 +100,21 @@ int table_ees_global_by_error::delete_all_rows(void) {
   return 0;
 }
 
-ha_rows table_ees_global_by_error::get_row_count(void) {
+ha_rows table_ees_global_by_error::get_row_count() {
   return error_class_max * max_global_server_errors;
 }
 
 table_ees_global_by_error::table_ees_global_by_error()
     : PFS_engine_table(&m_share, &m_pos), m_pos(), m_next_pos() {}
 
-void table_ees_global_by_error::reset_position(void) {
+void table_ees_global_by_error::reset_position() {
   m_pos.reset();
   m_next_pos.reset();
 }
 
 int table_ees_global_by_error::rnd_init(bool) { return 0; }
 
-int table_ees_global_by_error::rnd_next(void) {
+int table_ees_global_by_error::rnd_next() {
   m_pos.set_at(&m_next_pos);
 
   for (; m_pos.has_more_error(); m_pos.next_error()) {
@@ -139,8 +139,7 @@ int table_ees_global_by_error::rnd_pos(const void *pos) {
   return HA_ERR_RECORD_DELETED;
 }
 
-int table_ees_global_by_error::index_init(uint idx MY_ATTRIBUTE((unused)),
-                                          bool) {
+int table_ees_global_by_error::index_init(uint idx [[maybe_unused]], bool) {
   PFS_index_ees_global_by_error *result = nullptr;
   assert(idx == 0);
   result = PFS_NEW(PFS_index_ees_global_by_error);
@@ -149,7 +148,7 @@ int table_ees_global_by_error::index_init(uint idx MY_ATTRIBUTE((unused)),
   return 0;
 }
 
-int table_ees_global_by_error::index_next(void) {
+int table_ees_global_by_error::index_next() {
   m_pos.set_at(&m_next_pos);
 
   for (; m_pos.has_more_error(); m_pos.next_error()) {

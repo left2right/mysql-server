@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2013, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -26,7 +26,9 @@
 #include <sys/types.h>
 #include <atomic>
 
+#include <mysql/components/my_service.h>
 #include <mysql/components/services/component_sys_var_service.h>
+#include <mysql/components/services/group_replication_status_service.h>
 #include "m_string.h"
 #include "my_dbug.h"
 #include "my_inttypes.h"
@@ -164,7 +166,7 @@ int group_replication_start(char **error_message, THD *thd) {
         (st_mysql_group_replication *)plugin_decl(plugin)->info;
     /*
       is_running check is required below before storing credentials.
-      Check makes sure runing instance of START GR is not impacted by
+      Check makes sure running instance of START GR is not impacted by
       temporary storage of credentials or if storing credential failed
       message is meaningful.
       e.g. of credential conflict blocked by below check
@@ -423,7 +425,8 @@ void get_server_main_ssl_parameters(
       version;
 
   server_main_callback.read_parameters(&ca, &capath, &version, &cert, &cipher,
-                                       &ciphersuites, &key, &crl, &crlpath);
+                                       &ciphersuites, &key, &crl, &crlpath,
+                                       nullptr, nullptr);
 
   server_ssl_variables->ssl_ca = my_strdup_nullable(ca);
   server_ssl_variables->ssl_capath = my_strdup_nullable(capath);
@@ -445,7 +448,8 @@ void get_server_admin_ssl_parameters(
       version;
 
   server_admin_callback.read_parameters(&ca, &capath, &version, &cert, &cipher,
-                                        &ciphersuites, &key, &crl, &crlpath);
+                                        &ciphersuites, &key, &crl, &crlpath,
+                                        nullptr, nullptr);
 
   server_ssl_variables->ssl_ca = my_strdup_nullable(ca);
   server_ssl_variables->ssl_capath = my_strdup_nullable(capath);
@@ -549,6 +553,39 @@ bool is_gtid_committed(const Gtid &gtid) {
   return result;
 }
 
+bool wait_for_gtid_set_committed(const char *gtid_set_text, double timeout,
+                                 bool update_thd_status) {
+  THD *thd = current_thd;
+  Gtid_set wait_for_gtid_set(global_sid_map, nullptr);
+
+  global_sid_lock->rdlock();
+
+  if (wait_for_gtid_set.add_gtid_text(gtid_set_text) != RETURN_STATUS_OK) {
+    global_sid_lock->unlock();
+    return true;
+  }
+
+  /*
+    If the current session owns a GTID that is part of the waiting
+    set then that GTID will not reach GTID_EXECUTED while the session
+    is waiting.
+  */
+  if (thd->owned_gtid.sidno > 0 &&
+      wait_for_gtid_set.contains_gtid(thd->owned_gtid)) {
+    global_sid_lock->unlock();
+    return true;
+  }
+
+  gtid_state->begin_gtid_wait();
+  bool result = gtid_state->wait_for_gtid_set(thd, &wait_for_gtid_set, timeout,
+                                              update_thd_status);
+  gtid_state->end_gtid_wait();
+
+  global_sid_lock->unlock();
+
+  return result;
+}
+
 unsigned long get_replica_max_allowed_packet() {
   return replica_max_allowed_packet;
 }
@@ -597,7 +634,10 @@ bool get_group_replication_view_change_uuid(std::string &uuid) {
                         &component_sys_variable_register_service_handler);
 
   char *var_value = nullptr;
-  size_t var_len = 36;  // uuid length
+  // uuid length + sizeof('\0')
+  constexpr size_t var_buffer_capacity = UUID_LENGTH + 1;
+  size_t var_len = var_buffer_capacity;
+
   bool error = false;
 
   if (nullptr == component_sys_variable_register_service_handler) {
@@ -609,21 +649,49 @@ bool get_group_replication_view_change_uuid(std::string &uuid) {
       reinterpret_cast<SERVICE_TYPE(component_sys_variable_register) *>(
           component_sys_variable_register_service_handler);
 
-  if ((var_value = new char[var_len + 1]) == nullptr) {
+  if ((var_value = new char[var_len]) == nullptr) {
     error = true; /* purecov: inspected */
     goto end;     /* purecov: inspected */
   }
 
-  // The variable may not exist, thence we use its default value.
-  uuid.assign("AUTOMATIC");
   if (!component_sys_variable_register_service->get_variable(
           "mysql_server", "group_replication_view_change_uuid",
           reinterpret_cast<void **>(&var_value), &var_len)) {
     uuid.assign(var_value, var_len);
+  } else if (var_len != var_buffer_capacity) {
+    // Should never happen: no enough space for UUID in the buffer
+    assert(false);
+    error = true;
+    goto end;
+  } else {
+    // The variable does not exist, thence we use its default value.
+    uuid.assign("AUTOMATIC");
   }
 
 end:
   srv_registry->release(component_sys_variable_register_service_handler);
   delete[] var_value;
   return error;
+}
+
+bool is_group_replication_member_secondary() {
+  bool is_a_secondary = false;
+
+  my_h_service gr_status_service_handler = nullptr;
+  SERVICE_TYPE(group_replication_status_service_v1) *gr_status_service =
+      nullptr;
+  srv_registry->acquire("group_replication_status_service_v1",
+                        &gr_status_service_handler);
+  if (nullptr != gr_status_service_handler) {
+    gr_status_service =
+        reinterpret_cast<SERVICE_TYPE(group_replication_status_service_v1) *>(
+            gr_status_service_handler);
+    if (gr_status_service
+            ->is_group_in_single_primary_mode_and_im_a_secondary()) {
+      is_a_secondary = true;
+    }
+  }
+
+  srv_registry->release(gr_status_service_handler);
+  return is_a_secondary;
 }

@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2020, 2021, Oracle and/or its affiliates.
+  Copyright (c) 2020, 2023, Oracle and/or its affiliates.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -35,10 +35,13 @@
 #include <stdexcept>  // logic_error
 #include <thread>
 #include <type_traits>  // decay_t, enable_if
+#include <typeindex>
 #include <unordered_map>
+#include <utility>
 
+#include "my_compiler.h"
+#include "mysql/harness/net_ts/impl/callstack.h"
 #include "mysql/harness/net_ts/netfwd.h"
-#include "mysql/harness/stdx/type_traits.h"  // conjunction, void_t
 
 namespace net {
 enum class fork_event { prepare, parent, child };
@@ -89,6 +92,9 @@ class async_completion {
 
 // 13.5 [async.assoc.alloc]
 
+MY_COMPILER_DIAGNOSTIC_PUSH()
+MY_COMPILER_CLANG_DIAGNOSTIC_IGNORE("-Wdeprecated-declarations")
+
 template <class T, class ProtoAllocator = std::allocator<void>>
 struct associated_allocator;
 
@@ -96,7 +102,9 @@ template <class T, class ProtoAllocator = std::allocator<void>>
 using associated_allocator_t =
     typename associated_allocator<T, ProtoAllocator>::type;
 
-template <class T, class ProtoAllocator, typename = stdx::void_t<>>
+MY_COMPILER_DIAGNOSTIC_POP()
+
+template <class T, class ProtoAllocator, typename = std::void_t<>>
 struct associated_allocator_impl {
   using type = ProtoAllocator;
 
@@ -107,7 +115,7 @@ struct associated_allocator_impl {
 
 template <class T, class ProtoAllocator>
 struct associated_allocator_impl<T, ProtoAllocator,
-                                 stdx::void_t<typename T::allocator_type>> {
+                                 std::void_t<typename T::allocator_type>> {
   using type = typename T::allocator_type;
 
   static type __get(const T &t, const ProtoAllocator & /* a */) noexcept {
@@ -205,16 +213,14 @@ class execution_context {
     std::unique_ptr<service, void (*)(service *)> ptr_;
   };
 
-  using service_key_type = void (*)();
+  using service_key_type = std::type_index;
 
   /**
-   * create one function per Key and return its address.
-   *
-   * As it is static, the address is constant and can be used as key.
+   * maps selected type to unique identifier.
    */
   template <class Key>
   static service_key_type service_key() {
-    return reinterpret_cast<service_key_type>(&service_key<Key>);
+    return std::type_index(typeid(Key));
   }
 
   // mutex for services_, keys_
@@ -318,7 +324,7 @@ class execution_context::service {
 //
 namespace impl {
 
-template <class T, class = stdx::void_t<>>
+template <class T, class = std::void_t<>>
 struct is_executor : std::false_type {};
 
 // checker for the requirements of a executor
@@ -341,7 +347,7 @@ auto executor_requirements(U *__x = nullptr, const U *__const_x = nullptr,
                            void (*f)() = nullptr,
                            const std::allocator<int> &a = {})
     -> std::enable_if_t<
-        stdx::conjunction<
+        std::conjunction<
             std::is_copy_constructible<T>,
             // methods/operators must exist
             std::is_same<decltype(*__const_x == *__const_x), bool>,
@@ -353,7 +359,7 @@ auto executor_requirements(U *__x = nullptr, const U *__const_x = nullptr,
             std::is_void<decltype(__x->defer(std::move(f), a))>>::value,
 
         // context() may either return execution_context & or E&
-        stdx::void_t<decltype(__x->context()), void()>>;
+        std::void_t<decltype(__x->context()), void()>>;
 
 template <class T>
 struct is_executor<T, decltype(executor_requirements<T>())> : std::true_type {};
@@ -374,11 +380,11 @@ constexpr executor_arg_t executor_arg = executor_arg_t();
 
 namespace impl {
 
-template <class T, class Executor, typename = stdx::void_t<>>
+template <class T, class Executor, typename = std::void_t<>>
 struct uses_executor : std::false_type {};
 
 template <class T, class Executor>
-struct uses_executor<T, Executor, stdx::void_t<typename T::executor_type>>
+struct uses_executor<T, Executor, std::void_t<typename T::executor_type>>
     : std::is_convertible<Executor, typename T::executor_type> {};
 
 }  // namespace impl
@@ -390,7 +396,7 @@ template <class T, class Executor>
 constexpr bool uses_executor_v = uses_executor<T, Executor>::value;
 
 // 13.12 [async.assoc.exec]
-template <class T, class Executor, typename = stdx::void_t<>>
+template <class T, class Executor, typename = std::void_t<>>
 struct associated_executor_impl {
   using type = Executor;
 
@@ -401,7 +407,7 @@ struct associated_executor_impl {
 
 template <class T, class Executor>
 struct associated_executor_impl<T, Executor,
-                                stdx::void_t<typename T::executor_type>> {
+                                std::void_t<typename T::executor_type>> {
   using type = typename T::executor_type;
 
   static type __get(const T &t, const Executor & /* a */) noexcept {
@@ -889,7 +895,9 @@ class strand {
 
   inner_executor_type get_inner_executor() const noexcept { return inner_ex_; }
 
-  bool running_in_this_thread() const noexcept;
+  bool running_in_this_thread() const noexcept {
+    return impl::Callstack<strand>::contains(this) != nullptr;
+  }
 
   execution_context &context() const noexcept { return inner_ex_.context(); }
 
@@ -897,7 +905,11 @@ class strand {
   void on_work_finished() const noexcept { inner_ex_.on_work_finished(); }
 
   template <class Func, class ProtoAllocator>
-  void dispatch(Func &&f, const ProtoAllocator &a) const;
+  void dispatch(Func &&f, const ProtoAllocator & /* a */) const {
+    if (running_in_this_thread()) {
+      std::forward<Func>(f)();
+    }
+  }
   template <class Func, class ProtoAllocator>
   void post(Func &&f, const ProtoAllocator &a) const;
   template <class Func, class ProtoAllocator>
@@ -905,6 +917,9 @@ class strand {
 
  private:
   Executor inner_ex_;
+
+  bool running_{false};
+  std::queue<std::function<void()>> jobs_;
 };
 
 template <class Executor>

@@ -31,6 +31,7 @@
 SET sql_log_bin=0;
 CREATE USER 'manish'@'%' IDENTIFIED BY 'rpl';
 GRANT REPLICATION SLAVE ON *.* TO 'manish'@'%';
+GRANT GROUP_REPLICATION_STREAM ON *.* TO 'manish'@'%';
 FLUSH PRIVILEGES;
 SET sql_log_bin=1;
 
@@ -45,7 +46,7 @@ INSERT INTO t1 VALUES (1);
 
 --echo # CHANGE MASTER with options apart from the MASTER_USER and
 --echo # MASTER_PASSWORD will cause error.
---error ER_SLAVE_CHANNEL_OPERATION_NOT_ALLOWED
+--error ER_REPLICA_CHANNEL_OPERATION_NOT_ALLOWED
 CHANGE REPLICATION SOURCE TO SOURCE_USER='MANISH', SOURCE_PASSWORD='abc_manish_abc', SOURCE_PORT=13000 FOR CHANNEL 'group_replication_recovery';
 
 --let $assert_text=No new user is created after the execution of the change master
@@ -54,7 +55,7 @@ CHANGE REPLICATION SOURCE TO SOURCE_USER='MANISH', SOURCE_PASSWORD='abc_manish_a
 
 --echo # MASTER_PASSWORD value for the CHANGE MASTER command will not be logged in the error log.
 --let $grep_file=$MYSQLTEST_VARDIR/tmp/group_replication_recovery_change_master.err
---let $grep_pattern= master_password
+--let $grep_pattern= source_password
 --let $grep_output= print_count
 --source include/grep_pattern.inc
 
@@ -73,6 +74,13 @@ CHANGE REPLICATION SOURCE TO SOURCE_USER='manish', SOURCE_PASSWORD='rpl' FOR CHA
 --let $assert_cond= `SELECT COUNT(*) = 1 FROM mysql.slave_master_info WHERE User_name LIKE 'manish'`
 --source include/assert.inc
 
+SET sql_log_bin=0;
+CREATE USER 'manish'@'%' IDENTIFIED BY 'rpl';
+GRANT REPLICATION SLAVE ON *.* TO 'manish'@'%';
+GRANT GROUP_REPLICATION_STREAM ON *.* TO 'manish'@'%';
+FLUSH PRIVILEGES;
+SET sql_log_bin=1;
+
 --source include/start_group_replication.inc
 
 --echo # Ensuring the the two members are online.
@@ -89,4 +97,10 @@ DROP TABLE t1;
 SET sql_log_bin=0;
 DROP USER manish;
 SET sql_log_bin=1;
+
+--connection server2
+SET sql_log_bin=0;
+DROP USER manish;
+SET sql_log_bin=1;
+
 --source include/group_replication_end.inc

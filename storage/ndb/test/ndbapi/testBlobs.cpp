@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -22,6 +22,7 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 */
 
+#include "util/require.h"
 #include <ndb_global.h>
 #include <NdbOut.hpp>
 #include <OutputStream.hpp>
@@ -3553,7 +3554,7 @@ setupOperation(NdbOperation*& op, OpTypes optype, Tup& tup)
   case PkInsert:
   case PkUpdate:
   case UkUpdate:
-    /* Fall through */
+    [[fallthrough]];
   case PkWrite:
   case UkWrite:
     CHK(setBlobValue(tup) == 0);
@@ -3928,7 +3929,7 @@ static int bugtest_62321()
   DBG("bugtest_62321 : Error code from other ops in batch obscured");
 
   /*
-     1) Setup table : 1 row exists, another doesnt
+     1) Setup table : 1 row exists, another doesn't
      2) Start transaction
      3) Define failing before op
      4) Define Blob op with/without post-exec part
@@ -4716,6 +4717,7 @@ testmain()
     DBG("random seed = " << g_opt.m_seed);
     ndb_srand(g_opt.m_seed);
   }
+
   for (g_loop = 0; g_opt.m_loop == 0 || g_loop < g_opt.m_loop; g_loop++) {
     for (int storage= 0; storage < 2; storage++) {
       if (!testcase(storageSymbol[storage]))
@@ -5945,7 +5947,7 @@ bugtest_27772916()
     switch(v)
     {
     case 0:
-      /* Fall through */
+      [[fallthrough]];
     case 1:
     {
       /* Define a scan, reading blobs */
@@ -5959,7 +5961,7 @@ bugtest_27772916()
       break;
     }
     case 2:
-      /* Fall through */
+      [[fallthrough]];
     case 3:
     {
       /* Define an update operation */

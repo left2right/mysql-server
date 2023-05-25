@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2017, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -70,6 +70,16 @@ enum class Window_retrieve_cached_row_reason {
   LAST_IN_PEERSET = 4,
   MISC_POSITIONS = 5  // NTH_VALUE, LEAD/LAG have dynamic indexes 5..N
 };
+
+/**
+  The number of windows is limited to avoid the stack blowing up
+  when constructing iterators recursively. There used to be no limit, but
+  it would be unsafe since QEP_shared::m_idx of tmp tables assigned for windows
+  would exceed the old range of its type plan_idx (int8). It
+  has now been widened, so the max number of windows could be increased
+  if need be, modulo other problems. We could also make it a system variable.
+*/
+constexpr int kMaxWindows = 127;
 
 /**
   Represents the (explicit) window of a SQL 2003 section 7.11 \<window clause\>,
@@ -178,13 +188,6 @@ class Window {
   bool m_opt_last_row;
 
   /**
-    Can be true if first window after a join: we may need to restore the input
-    record after buffered window processing if EQRefIterator's caching logic
-    presumes the record hasn't been modified (when last qep_tab uses JT_EQ_REF).
-  */
-  bool m_needs_restore_input_row;
-
-  /**
     The last window to be evaluated at execution time.
   */
   bool m_last;
@@ -230,10 +233,12 @@ class Window {
   st_lead_lag m_opt_lead_lag;
 
  protected:
-  const Window *m_ancestor;             ///< resolved from existing window name
-  List<Item_sum> m_functions;           ///< window functions based on 'this'
-  List<Cached_item> m_partition_items;  ///< items for the PARTITION BY columns
-  List<Cached_item> m_order_by_items;   ///< items for the ORDER BY exprs.
+  const Window *m_ancestor;    ///< resolved from existing window name
+  List<Item_sum> m_functions;  ///< window functions based on 'this'
+  Mem_root_array<Cached_item *>
+      m_partition_items;  ///< items for the PARTITION BY columns
+  Mem_root_array<Cached_item *>
+      m_order_by_items;  ///< items for the ORDER BY exprs.
 
   /*------------------------------------------------------------------------
    *
@@ -344,13 +349,16 @@ class Window {
   }
 
   /**
-     Keys for m_frame_buffer_cache and m_special_rows_cache, for special
+     Keys for m_special_rows_cache, for special
      rows (see the comment on m_special_row_cache). Note that they are negative,
      so that they will never collide with actual row numbers in the frame.
      This allows us to treat them interchangeably with real row numbers
      as function arguments; e.g., bring_back_frame_row() can restore either
      a “normal” row from the frame, or one of the special rows, and does not
      need to take in separate flags for the two.
+     TODO(Chaithra): We have only one special key. Do we need the enum?
+     Also m_special_rows_cache/cache_length/max_cache_length should be looked
+     into.
   */
   enum Special_keys {
     /**
@@ -360,12 +368,10 @@ class Window {
      the partition, and restore it later.
     */
     FBC_FIRST_IN_NEXT_PARTITION = -1,
-    /// The last row cached in the frame buffer; needed to resurrect input row
-    FBC_LAST_BUFFERED_ROW = -2,
     // Insert new values here.
     // And keep the ones below up to date.
     FBC_FIRST_KEY = FBC_FIRST_IN_NEXT_PARTITION,
-    FBC_LAST_KEY = FBC_LAST_BUFFERED_ROW,
+    FBC_LAST_KEY = FBC_FIRST_IN_NEXT_PARTITION,
   };
 
  protected:
@@ -443,7 +449,7 @@ class Window {
 
   /**
     Execution state: used iff m_needs_last_peer_in_frame. True if a row
-    leaving the frame is the last row in the peer set withing the frame.
+    leaving the frame is the last row in the peer set within the frame.
   */
   int64 m_is_last_row_in_peerset_within_frame;
 
@@ -472,20 +478,25 @@ class Window {
     Execution state: The number of the row being visited for its contribution
     to a window function, relative to the start of the partition. Note that
     this will often be different from the current row for which we are
-    processing the window function, reading it for output. That is given by
-    m_rowno_in_partition, q.v.
+    processing the window function, readying it for output. That is given by
+    \c m_rowno_in_partition, q.v. Contrast also with \c m_rowno_in_frame
+    which is frame relative.
   */
   int64 m_rowno_being_visited;
 
   /**
-    Execution state: the row number of the current row within a frame, cf.
-    m_is_last_row_in_frame, relative to start of the frame. 1-based.
+    Execution state: the row number of the row we are looking at for evaluating
+    its contribution to some window function(s).  It is relative to start of
+    the frame and 1-based. It is typically set after fetching a row from the
+    frame buffer using \c bring_back_frame_row and before calling
+    \c copy_funcs.  Cf. also \c m_is_last_row_in_frame.
   */
   int64 m_rowno_in_frame;
 
   /**
     Execution state: The row number of the current row being readied for
     output within the partition. 1-based.
+    In \c process_buffered_windowing_record this is known as \c current_row.
   */
   int64 m_rowno_in_partition;
 
@@ -503,18 +514,67 @@ class Window {
    *
    *------------------------------------------------------------------------*/
  public:
+  /*
+    For RANGE bounds, we need to be able to check if a given row is
+    before the lower bound, or after the upper bound, as we don't know
+    ahead of time how many rows to skip (unlike for ROW bounds).
+    Often, the lower and upper bounds are the same, as they are
+    inclusive.
+
+    We solve this by having an array of comparators of the type
+
+       value ⋛ <cache>(ref_value)
+
+    where ⋛ is a three-way comparator, and <cache>(ref_value) is an
+    Item_cache where we can store the value of the reference row
+    before we invoke the comparison. For instance, if we have a
+    row bound such as
+
+        ... OVER (ORDER BY a,b) FROM t1
+
+     we will have an array with the two comparators
+
+        t1.a ⋛ <cache>(a)
+        t1.b ⋛ <cache>(b)
+
+     and when we evaluate the frame bounds for a given row, we insert
+     the reference values in the caches and then do the comparison to
+     figure out if we're before, in or after the bound. As this is a
+     lexicographic comparison, we only need to evaluate the second
+     comparator if the first one returns equality.
+
+     The expressions on the right-hand side can be somewhat more
+     complicated; say that we have a window specification like
+
+        ... OVER (ORDER BY a RANGE BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+
+     In this case, the lower bound and upper bound are different
+     (both arrays will always contain only a single element):
+
+        Lower: t1.a ⋛ <cache>(a) - 2
+        Upper: t1.a ⋛ <cache>(a) + 3
+
+     ie., there is an Item_func_plus or Item_func_minus with some
+     constant expression as the second argument.
+
+     The comparators for the lower bound is stored in [0], and for
+     the upper bound in [1].
+   */
+  Bounds_checked_array<Arg_comparator> m_comparators[2];
+
   /**
-    RANGE bound determination computation; first index is a value of the
-    enum_window_border_type enum; second index 0 for the start bound, 1 for
-    the end bound. Each item is Item_func_lt/gt.
-  */
-  Item_func *m_comparators[WBT_VALUE_FOLLOWING + 1][2];
+    The logical ordering index (into LogicalOrderings) needed by this window's
+    PARTITION BY and ORDER BY clauses together (if any; else, 0). Used only by
+    the hypergraph join optimizer.
+   */
+  int m_ordering_idx;
+
   /**
-    Each item has inverse operation of the corresponding
-    comparator in m_comparators. Determines if comparison
-    should continue with next field in order by list.
-  */
-  Item_func *m_inverse_comparators[WBT_VALUE_FOLLOWING + 1][2];
+    Used temporarily by the hypergraph join optimizer to mark which windows
+    are referred to by a given ordering (so that one doesn't try to satisfy
+    a window's ordering by an ordering referring to that window).
+   */
+  bool m_mark;
 
  protected:
   /**
@@ -545,6 +605,12 @@ class Window {
   */
   int64 m_last_rowno_in_range_frame;
 
+  /**
+    Execution state. Only used for ROWS frame optimized MIN/MAX.
+    The (1-based) number in the partition of first row in the current frame.
+  */
+  int64 m_first_rowno_in_rows_frame;
+
   /*------------------------------------------------------------------------
    *
    * Window function special behaviour toggles. These boolean flag influence
@@ -559,7 +625,7 @@ class Window {
    *     copy_<kind>_window_functions()  [see process_buffered_windowing_record]
    *     w.set_<toggle>(false)
    *
-   * to achive a special semantic, since we cannot pass down extra parameters.
+   * to achieve a special semantic, since we cannot pass down extra parameters.
    *
    *------------------------------------------------------------------------*/
 
@@ -620,9 +686,10 @@ class Window {
         m_static_aggregates(false),
         m_opt_first_row(false),
         m_opt_last_row(false),
-        m_needs_restore_input_row(false),
         m_last(false),
         m_ancestor(nullptr),
+        m_partition_items(*THR_MALLOC),
+        m_order_by_items(*THR_MALLOC),
         m_tmp_pos(nullptr, -1),
         m_frame_buffer_param(nullptr),
         m_frame_buffer(nullptr),
@@ -914,9 +981,9 @@ class Window {
     @return false if success, true if error
   */
   static bool setup_windows1(THD *thd, Query_block *select,
-                             Ref_item_array ref_item_array, TABLE_LIST *tables,
+                             Ref_item_array ref_item_array, Table_ref *tables,
                              mem_root_deque<Item *> *fields,
-                             List<Window> &windows);
+                             List<Window> *windows);
   /**
     Like setup_windows1() but contains operations which must wait until
     the start of the execution phase.
@@ -926,7 +993,7 @@ class Window {
 
     @return false if success, true if error
   */
-  static bool setup_windows2(THD *thd, List<Window> &windows);
+  static bool setup_windows2(THD *thd, List<Window> *windows);
 
   /**
     Check window definitions to remove unused windows. We do this
@@ -935,7 +1002,7 @@ class Window {
 
     @param windows         The list of windows defined for this select
   */
-  static void eliminate_unused_objects(List<Window> &windows);
+  static void eliminate_unused_objects(List<Window> *windows);
 
   /**
     Resolve and set up the PARTITION BY or an ORDER BY list of a window.
@@ -950,13 +1017,27 @@ class Window {
     @returns false if success, true if error
   */
   bool resolve_window_ordering(THD *thd, Ref_item_array ref_item_array,
-                               TABLE_LIST *tables,
+                               Table_ref *tables,
                                mem_root_deque<Item *> *fields, ORDER *o,
                                bool partition_order);
   /**
     Return true if this window's name is not unique in windows
   */
-  bool check_unique_name(List<Window> &windows);
+  bool check_unique_name(const List<Window> &windows);
+
+  /**
+    Specify that this window is to be evaluated after a given
+    temporary table. This means that all expressions that have been
+    materialized (as given by items_to_copy) will be replaced with the
+    given temporary table fields. (If there are multiple materializations,
+    this function must be called for each of them in order.)
+
+    Only the hypergraph join optimizer uses this currently; the old
+    join optimizer instead uses Item_ref objects that point to the
+    base slice, which is then replaced at runtime depending on which
+    temporary table we are to evaluate from.
+  */
+  void apply_temp_table(THD *thd, const Func_ptr_array &items_to_copy);
 
   /**
     Set up cached items for an partition or an order by list
@@ -1048,14 +1129,9 @@ class Window {
   bool is_last() const { return m_last; }
 
   /**
-    See #m_needs_restore_input_row
+    An override used by the hypergraph join optimizer only.
   */
-  void set_needs_restore_input_row(bool b) { m_needs_restore_input_row = b; }
-
-  /**
-    See #m_needs_restore_input_row
-  */
-  bool needs_restore_input_row() const { return m_needs_restore_input_row; }
+  void set_is_last(bool last) { m_last = last; }
 
   /**
     See #m_opt_nth_row
@@ -1211,7 +1287,7 @@ class Window {
     See #m_is_last_row_in_frame
   */
   bool is_last_row_in_frame() const {
-    return m_is_last_row_in_frame || m_query_block->table_list.elements == 0;
+    return m_is_last_row_in_frame || m_query_block->m_table_list.elements == 0;
   }
 
   /**
@@ -1247,6 +1323,17 @@ class Window {
     See #m_rowno_in_partition
   */
   void set_rowno_in_partition(int64 rowno) { m_rowno_in_partition = rowno; }
+
+  /**
+    See #m_first_rowno_in_rows_frame
+  */
+  void set_first_rowno_in_rows_frame(int64 rowno) {
+    m_first_rowno_in_rows_frame = rowno;
+  }
+
+  int64 first_rowno_in_rows_frame() const {
+    return m_first_rowno_in_rows_frame;
+  }
 
   /**
     See #m_first_rowno_in_range_frame
@@ -1329,19 +1416,13 @@ class Window {
   void reset_round() { reset_execution_state(RL_ROUND); }
 
   /**
-    Reset resolution and execution state to prepare for next execution of a
-    prepared statement.
-  */
-  void reinit_before_use() { reset_execution_state(RL_FULL); }
-
-  /**
     Reset execution state for LEAD/LAG for the current row in partition.
   */
   void reset_lead_lag();
 
-  enum Reset_level { RL_FULL, RL_ROUND, RL_PARTITION };
-
  private:
+  enum Reset_level { RL_ROUND, RL_PARTITION };
+
   /// Common function for all types of resetting
   void reset_execution_state(Reset_level level);
 
@@ -1366,7 +1447,7 @@ class Window {
 
     @returns the aggregated sorting costs of the windowing
   */
-  static double compute_cost(double cost, List<Window> &windows);
+  static double compute_cost(double cost, const List<Window> &windows);
 
  private:
   /**
@@ -1386,14 +1467,22 @@ class Window {
     SQL standard when it comes to repeatability of non-deterministic (partially
     ordered) result sets for windowing inside a query, cf. #equal_sort.
     If more than two have the same ordering, the same applies, we only sort
-    before the first (sort equivalent) window.
+    before the first (sort equivalent) window. The hypergraph optimizer uses
+    the interesting order framework instead, eliding all sorts eliminated by
+    this function and possibly more.
+
+    Note that we do not merge windows that have the same ordering requirements,
+    so we may still get the extra materialization and multiple rounds of
+    buffering. Yet, we should get _correctness_, as long as materialization
+    preserves row ordering (which it does for all of our supported temporary
+    table types).
 
     If the result set is implicitly grouped, we also skip any sorting for
     windows.
 
     @param windows     list of windows
   */
-  static void reorder_and_eliminate_sorts(List<Window> &windows);
+  static void reorder_and_eliminate_sorts(List<Window> *windows);
 
   /**
     Return true of the physical[1] sort orderings for the two windows are the

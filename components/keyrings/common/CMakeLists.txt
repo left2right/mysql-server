@@ -1,4 +1,4 @@
-# Copyright (c) 2021, Oracle and/or its affiliates.
+# Copyright (c) 2021, 2023, Oracle and/or its affiliates.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -46,9 +46,18 @@ SET (KEYRING_COMMON_DEPENDENCIES
   GenError
   )
 
+IF(COMPONENT_COMPILE_VISIBILITY)
+  SET(COMPILE_OPTIONS_ARG COMPILE_OPTIONS "${COMPONENT_COMPILE_VISIBILITY}")
+ENDIF()
+
 ADD_CONVENIENCE_LIBRARY(
   keyring_common
   ${KEYRING_COMMON_SOURCES}
+  ${COMPILE_OPTIONS_ARG}
   DEPENDENCIES ${KEYRING_COMMON_DEPENDENCIES}
-  LINK_LIBRARIES library_mysys
+  SYSTEM_INCLUDE_DIRECTORIES
+    $<TARGET_PROPERTY:extra::rapidjson,INTERFACE_INCLUDE_DIRECTORIES>
+  COMPILE_DEFINITIONS
+    $<TARGET_PROPERTY:extra::rapidjson,INTERFACE_COMPILE_DEFINITIONS>
+  LINK_LIBRARIES library_mysys extra::rapidjson
 )

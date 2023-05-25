@@ -1,7 +1,7 @@
 include/group_replication.inc [rpl_server_count=3]
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection server1]
 #
 # Setup a new group with three servers.
@@ -13,6 +13,7 @@ Note	####	Storing MySQL user name or password information in the master info rep
 SET SESSION sql_log_bin= 0;
 CREATE USER "recovery_user" IDENTIFIED BY "recovery_password";
 GRANT REPLICATION SLAVE ON *.* TO "recovery_user";
+GRANT GROUP_REPLICATION_STREAM ON *.* TO 'recovery_user'@'%';
 FLUSH PRIVILEGES;
 SET SESSION sql_log_bin= 1;
 include/start_and_bootstrap_group_replication.inc
@@ -20,6 +21,11 @@ include/start_and_bootstrap_group_replication.inc
 ############################################################
 # 02. Start server2
 [connection server2]
+SET SESSION sql_log_bin= 0;
+CREATE USER "recovery_user" IDENTIFIED BY "recovery_password";
+GRANT GROUP_REPLICATION_STREAM ON *.* TO 'recovery_user'@'%';
+FLUSH PRIVILEGES;
+SET SESSION sql_log_bin= 1;
 include/start_group_replication.inc
 
 ############################################################
@@ -57,27 +63,34 @@ CREATE TABLE test.t3 (c1 INT NOT NULL PRIMARY KEY) ENGINE=InnoDB;
 ############################################################
 # 08. Start server3
 [connection server3]
+SET SESSION sql_log_bin= 0;
+CREATE USER "recovery_user" IDENTIFIED BY "recovery_password";
+GRANT GROUP_REPLICATION_STREAM ON *.* TO 'recovery_user'@'%';
+FLUSH PRIVILEGES;
+SET SESSION sql_log_bin= 1;
 CHANGE REPLICATION SOURCE TO SOURCE_USER= 'recovery_user', SOURCE_PASSWORD= 'recovery_password' FOR CHANNEL 'group_replication_recovery';
 Warnings:
 Note	1759	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	1760	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	1760	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 SET SESSION sql_log_bin= 0;
 call mtr.add_suppression("There was an error when connecting to the donor server*");
 call mtr.add_suppression("For details please check performance_schema*");
+call mtr.add_suppression("Replica I/O for channel 'group_replication_recovery': Source command COM_REGISTER_REPLICA failed*");
+call mtr.add_suppression("Replica I/O thread couldn't register on source");
 SET SESSION sql_log_bin= 1;
 include/start_group_replication.inc
 
 ############################################################
 # 09. Signal to continue T3 on server1.
 [connection server_1]
-SET DEBUG_SYNC= 'now SIGNAL waiting';
 SET @@GLOBAL.DEBUG= @debug_save;
+SET DEBUG_SYNC= 'now SIGNAL waiting';
 
 ############################################################
 # 10. Signal to continue T1 and T2 on server2.
 [connection server2]
-SET DEBUG_SYNC= 'now SIGNAL signal.after_before_message_send_after_applier_prepare_continue';
 SET @@GLOBAL.DEBUG= @debug_save;
+SET DEBUG_SYNC= 'now SIGNAL signal.after_before_message_send_after_applier_prepare_continue';
 
 ############################################################
 # 11. Check members state on server1.
@@ -157,6 +170,14 @@ server-binary-log.000001	#	Query	#	#	use `test`; CREATE TABLE test.t3 (c1 INT NO
 DROP TABLE t1;
 DROP TABLE t2;
 DROP TABLE t3;
+SET SESSION sql_log_bin= 0;
+DROP USER "recovery_user";
+SET SESSION sql_log_bin= 1;
+[connection server2]
+SET SESSION sql_log_bin= 0;
+DROP USER "recovery_user";
+SET SESSION sql_log_bin= 1;
+[connection server3]
 SET SESSION sql_log_bin= 0;
 DROP USER "recovery_user";
 SET SESSION sql_log_bin= 1;

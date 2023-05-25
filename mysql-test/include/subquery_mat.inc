@@ -3,6 +3,17 @@
 # (WL#1110: Subquery optimization: materialization)
 #
 
+-- disable_query_log
+-- disable_result_log
+# High values set for sampling scanning, effectively forcing full scan for
+# statistics.
+SET @innodb_stats_transient_sample_pages= @@GLOBAL.innodb_stats_transient_sample_pages;
+SET @@global.innodb_stats_transient_sample_pages=5000000000;
+SET @innodb_stats_persistent_sample_pages= @@GLOBAL.innodb_stats_persistent_sample_pages;
+SET @@global.innodb_stats_persistent_sample_pages=5000000000;
+-- enable_result_log
+-- enable_query_log
+
 # Force the feature, to test it as much as possible:
 set @old_opt_switch=@@optimizer_switch;
 set optimizer_switch='subquery_materialization_cost_based=off';
@@ -420,15 +431,17 @@ select a from t1 where a in (select c from t2 where d >= 20);
 
 # cacheing for IN predicates inside a having clause - here the cached
 # items are changed to point to temporary tables.
+--replace_column 10 7
 explain
-select a from t1 group by a having a in (select c from t2 where d >= 20);
+select/*+ NO_RANGE_OPTIMIZATION(t1) */ a from t1 group by a having a in (select c from t2 where d >= 20);
 select a from t1 group by a having a in (select c from t2 where d >= 20);
 
 # create an index that can be used for the outer query GROUP BY 
 create index iab on t1(a, b);
 ANALYZE TABLE t1;
+--replace_column 10 7
 explain
-select a from t1 group by a having a in (select c from t2 where d >= 20);
+select /*+ NO_RANGE_OPTIMIZATION(t1) */ a from t1 group by a having a in (select c from t2 where d >= 20);
 select a from t1 group by a having a in (select c from t2 where d >= 20);
 
 explain
@@ -1697,3 +1710,10 @@ DROP TABLE s, u;
 
 set @@optimizer_switch=@old_opt_switch;
 SET sql_mode = default;
+
+-- disable_query_log
+-- disable_result_log
+SET @@GLOBAL.innodb_stats_transient_sample_pages= @innodb_stats_transient_sample_pages;
+SET @@GLOBAL.innodb_stats_persistent_sample_pages= @innodb_stats_persistent_sample_pages;
+-- enable_result_log
+-- enable_query_log

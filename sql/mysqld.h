@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2010, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -30,13 +30,14 @@
 #include <sys/types.h>
 #include <time.h>
 #include <atomic>
+#include <string>
+#include <vector>
 
 #include <mysql/components/minimal_chassis.h>
 #include <mysql/components/services/dynamic_loader_scheme_file.h>
 #include "lex_string.h"
 #include "m_ctype.h"
 #include "my_command.h"
-#include "my_compiler.h"
 #include "my_compress.h"
 #include "my_getopt.h"
 #include "my_hostname.h"  // HOSTNAME_LENGTH
@@ -47,17 +48,17 @@
 #include "my_sqlcommand.h"  // SQLCOM_END
 #include "my_sys.h"         // MY_TMPDIR
 #include "my_thread.h"      // my_thread_attr_t
-#include "mysql/components/services/mysql_cond_bits.h"
-#include "mysql/components/services/mysql_mutex_bits.h"
-#include "mysql/components/services/mysql_rwlock_bits.h"
-#include "mysql/components/services/psi_cond_bits.h"
-#include "mysql/components/services/psi_file_bits.h"
-#include "mysql/components/services/psi_mutex_bits.h"
-#include "mysql/components/services/psi_rwlock_bits.h"
-#include "mysql/components/services/psi_socket_bits.h"
-#include "mysql/components/services/psi_stage_bits.h"
-#include "mysql/components/services/psi_statement_bits.h"
-#include "mysql/components/services/psi_thread_bits.h"
+#include "mysql/components/services/bits/mysql_cond_bits.h"
+#include "mysql/components/services/bits/mysql_mutex_bits.h"
+#include "mysql/components/services/bits/mysql_rwlock_bits.h"
+#include "mysql/components/services/bits/psi_cond_bits.h"
+#include "mysql/components/services/bits/psi_file_bits.h"
+#include "mysql/components/services/bits/psi_mutex_bits.h"
+#include "mysql/components/services/bits/psi_rwlock_bits.h"
+#include "mysql/components/services/bits/psi_socket_bits.h"
+#include "mysql/components/services/bits/psi_stage_bits.h"
+#include "mysql/components/services/bits/psi_statement_bits.h"
+#include "mysql/components/services/bits/psi_thread_bits.h"
 #include "mysql/status_var.h"
 #include "mysql_com.h"  // SERVER_VERSION_LENGTH
 #ifdef _WIN32
@@ -67,6 +68,7 @@
 #include "sql/sql_const.h"  // UUID_LENGTH
 
 class Rpl_global_filter;
+class Rpl_acf_configuration_handler;
 class Source_IO_monitor;
 class THD;
 class Time_zone;
@@ -103,6 +105,8 @@ typedef Bitmap<((MAX_INDEXES + 7) / 8 * 8)> Key_map; /* Used for finding keys */
 #define TEST_DO_QUICK_LEAK_CHECK       \
   4096 /**< Do Valgrind leak check for \
           each command. */
+#define TEST_NO_TEMP_TABLES \
+  8192 /**< No temp table engine is loaded, so use dummy costs. */
 
 #define SPECIAL_NO_NEW_FUNC 2     /* Skip new functions */
 #define SPECIAL_SKIP_SHOW_DB 4    /* Don't allow 'show db' */
@@ -124,10 +128,19 @@ extern bool dynamic_plugins_are_initialized;
 bool signal_restart_server();
 void kill_mysql(void);
 void refresh_status();
+void reset_status_by_thd();
 bool is_secure_file_path(const char *path);
 ulong sql_rnd_with_mutex();
 
 struct System_status_var *get_thd_status_var(THD *thd, bool *aggregated);
+
+#ifndef NDEBUG
+void thd_mem_cnt_alloc(THD *thd, size_t size, const char *key_name);
+#else
+void thd_mem_cnt_alloc(THD *thd, size_t size);
+#endif
+
+void thd_mem_cnt_free(THD *thd, size_t size);
 
 // These are needed for unit testing.
 void set_remaining_args(int argc, char **argv);
@@ -145,7 +158,7 @@ extern CHARSET_INFO *character_set_filesystem;
 enum enum_server_operational_state {
   SERVER_BOOTING,      /* Server is not operational. It is starting */
   SERVER_OPERATING,    /* Server is fully initialized and operating */
-  SERVER_SHUTTING_DOWN /* erver is shutting down */
+  SERVER_SHUTTING_DOWN /* Server is shutting down */
 };
 enum_server_operational_state get_server_state();
 
@@ -173,6 +186,7 @@ extern bool opt_local_infile, opt_myisam_use_mmap;
 extern bool opt_replica_compressed_protocol;
 extern ulong replica_exec_mode_options;
 extern Rpl_global_filter rpl_global_filter;
+extern Rpl_acf_configuration_handler *rpl_acf_configuration_handler;
 extern Source_IO_monitor *rpl_source_io_monitor;
 extern int32_t opt_regexp_time_limit;
 extern int32_t opt_regexp_stack_limit;
@@ -238,6 +252,7 @@ extern bool opt_using_transactions;
 extern ulong current_pid;
 extern ulong expire_logs_days;
 extern ulong binlog_expire_logs_seconds;
+extern bool opt_binlog_expire_logs_auto_purge;
 extern uint sync_binlog_period, sync_relaylog_period, sync_relayloginfo_period,
     sync_masterinfo_period, opt_mta_checkpoint_period, opt_mta_checkpoint_group;
 extern ulong opt_tc_log_size, tc_log_max_pages_used, tc_log_page_size;
@@ -286,6 +301,10 @@ extern char *opt_init_file;
 extern const char *opt_tc_log_file;
 extern char server_uuid[UUID_LENGTH + 1];
 extern const char *server_uuid_ptr;
+#if defined(HAVE_BUILD_ID_SUPPORT)
+extern char server_build_id[42];
+extern const char *server_build_id_ptr;
+#endif
 extern const double log_10[309];
 extern ulong binlog_cache_use, binlog_cache_disk_use;
 extern ulong binlog_stmt_cache_use, binlog_stmt_cache_disk_use;
@@ -338,6 +357,8 @@ enum enum_binlog_error_action {
   ABORT_SERVER = 1
 };
 extern const char *binlog_error_action_list[];
+extern char *opt_authentication_policy;
+extern std::vector<std::string> authentication_policy_list;
 
 extern ulong stored_program_cache_size;
 extern ulong back_log;
@@ -388,6 +409,9 @@ extern char *opt_keyring_migration_socket;
 extern char *opt_keyring_migration_source;
 extern char *opt_keyring_migration_destination;
 extern ulong opt_keyring_migration_port;
+
+extern ulonglong global_conn_mem_limit;
+extern ulonglong global_conn_mem_counter;
 /**
   Variable to check if connection related options are set
   as part of keyring migration.
@@ -409,6 +433,7 @@ extern PSI_mutex_key key_LOCK_error_log;
 extern PSI_mutex_key key_LOCK_thd_data;
 extern PSI_mutex_key key_LOCK_thd_sysvar;
 extern PSI_mutex_key key_LOCK_thd_protocol;
+extern PSI_mutex_key key_LOCK_thd_security_ctx;
 extern PSI_mutex_key key_LOG_LOCK_log;
 extern PSI_mutex_key key_source_info_data_lock;
 extern PSI_mutex_key key_source_info_run_lock;
@@ -441,6 +466,8 @@ extern PSI_mutex_key key_mta_temp_table_LOCK;
 extern PSI_mutex_key key_mta_gaq_LOCK;
 extern PSI_mutex_key key_thd_timer_mutex;
 extern PSI_mutex_key key_monitor_info_run_lock;
+extern PSI_mutex_key key_LOCK_delegate_connection_mutex;
+extern PSI_mutex_key key_LOCK_group_replication_connection_mutex;
 
 extern PSI_mutex_key key_commit_order_manager_mutex;
 extern PSI_mutex_key key_mutex_replica_worker_hash;
@@ -477,6 +504,7 @@ extern PSI_cond_key key_gtid_ensure_index_cond;
 extern PSI_cond_key key_COND_thr_lock;
 extern PSI_cond_key key_cond_slave_worker_hash;
 extern PSI_cond_key key_commit_order_manager_cond;
+extern PSI_cond_key key_COND_group_replication_connection_cond_var;
 extern PSI_thread_key key_thread_bootstrap;
 extern PSI_thread_key key_thread_handle_manager;
 extern PSI_thread_key key_thread_one_connection;
@@ -621,6 +649,7 @@ extern PSI_stage_info stage_binlog_transaction_decompress;
 extern PSI_stage_info stage_rpl_failover_fetching_source_member_details;
 extern PSI_stage_info stage_rpl_failover_updating_source_member_details;
 extern PSI_stage_info stage_rpl_failover_wait_before_next_fetch;
+extern PSI_stage_info stage_communication_delegation;
 #ifdef HAVE_PSI_STATEMENT_INTERFACE
 /**
   Statement instrumentation keys (sql).
@@ -697,6 +726,8 @@ extern mysql_mutex_t LOCK_tls_ctx_options;
 extern mysql_mutex_t LOCK_admin_tls_ctx_options;
 extern mysql_mutex_t LOCK_rotate_binlog_master_key;
 extern mysql_mutex_t LOCK_partial_revokes;
+extern mysql_mutex_t LOCK_authentication_policy;
+extern mysql_mutex_t LOCK_global_conn_mem_limit;
 
 extern mysql_cond_t COND_server_started;
 extern mysql_cond_t COND_compress_gtid_table;
@@ -719,15 +750,14 @@ int *get_remaining_argc();
 char ***get_remaining_argv();
 
 /* increment query_id and return it.  */
-inline MY_ATTRIBUTE((warn_unused_result)) query_id_t next_query_id() {
+[[nodiscard]] inline query_id_t next_query_id() {
   return ++atomic_global_query_id;
 }
 
 #define ER(X) please_use_ER_THD_or_ER_DEFAULT_instead(X)
 
 /* Accessor function for _connection_events_loop_aborted flag */
-inline MY_ATTRIBUTE(
-    (warn_unused_result)) bool connection_events_loop_aborted() {
+[[nodiscard]] inline bool connection_events_loop_aborted() {
   return connection_events_loop_aborted_flag.load();
 }
 
@@ -781,6 +811,10 @@ void set_mysqld_partial_revokes(bool value);
 
 bool check_and_update_partial_revokes_sysvar(THD *thd);
 
+bool parse_authentication_policy(char *val,
+                                 std::vector<std::string> &policy_list);
+bool validate_authentication_policy(char *val);
+bool update_authentication_policy();
 #ifdef _WIN32
 
 bool is_windows_service();
@@ -805,4 +839,8 @@ extern SERVICE_TYPE(dynamic_loader) * dynamic_loader_srv;
 
 class Deployed_components;
 extern Deployed_components *g_deployed_components;
+
+extern bool opt_persist_sensitive_variables_in_plaintext;
+
+void persisted_variables_refresh_keyring_support();
 #endif /* MYSQLD_INCLUDED */

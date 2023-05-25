@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2015, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -211,8 +211,7 @@ bool Storage_adapter::get(THD *thd, const K &key, enum_tx_isolation isolation,
 
 // Drop a dictionary object from core storage.
 template <typename T>
-void Storage_adapter::core_drop(THD *thd MY_ATTRIBUTE((unused)),
-                                const T *object) {
+void Storage_adapter::core_drop(THD *thd [[maybe_unused]], const T *object) {
   assert(s_use_fake_storage || thd->is_dd_system_thread());
   assert(bootstrap::DD_bootstrap_ctx::instance().get_stage() <=
          bootstrap::Stage::CREATED_TABLES);

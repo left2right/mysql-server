@@ -1,7 +1,7 @@
 include/group_replication.inc [rpl_server_count=2]
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection server1]
 [connection server1]
 SET @@SESSION.group_replication_consistency= BEFORE_ON_PRIMARY_FAILOVER;
@@ -17,6 +17,30 @@ SET @@GLOBAL.DEBUG= '+d,launch_hook_trans_begin_assert_if_hold';
 SHOW GLOBAL VARIABLES LIKE 'group_replication_consistency';
 Variable_name	Value
 group_replication_consistency	EVENTUAL
+SHOW PROCESSLIST;
+SHOW STATUS;
+SHOW ENGINE INNODB LOGS;
+SHOW ENGINE INNODB STATUS;
+SHOW ENGINE INNODB MUTEX;
+SHOW MASTER STATUS;
+SHOW REPLICA STATUS;
+SHOW CHARACTER SET;
+SHOW COLLATION;
+SHOW BINARY LOGS;
+SHOW OPEN TABLES;
+SHOW REPLICAS;
+SHOW BINLOG EVENTS;
+SHOW WARNINGS;
+SHOW ERRORS;
+SHOW ENGINES;
+SHOW PRIVILEGES;
+SHOW PROCEDURE STATUS;
+SHOW FUNCTION STATUS;
+SHOW PLUGINS;
+SHOW EVENTS;
+SHOW PROFILE;
+SHOW PROFILES;
+SHOW RELAYLOG EVENTS;
 
 # 3. Validate SQL command SET will not block
 SET @@GLOBAL.group_replication_member_weight= DEFAULT;

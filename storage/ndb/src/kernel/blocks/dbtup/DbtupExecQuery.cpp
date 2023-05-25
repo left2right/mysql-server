@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -120,63 +120,114 @@ dump_hex(const Uint32 *p, Uint32 len)
   }
 }
 
-/**
- * getStoredProcAttrInfo
- *
- * Get the I-Val of the supplied stored procedure's 
- * AttrInfo section
- * Initialise the AttrInfo length in the request
- */
-void Dbtup::getStoredProcAttrInfo(Uint32 storedId,
-                                 KeyReqStruct* req_struct,
-                                 Uint32& attrInfoIVal) 
-{
-  jamDebug();
-  StoredProcPtr storedPtr;
-  storedPtr.i = storedId;
-  ndbrequire(c_storedProcPool.getValidPtr(storedPtr));
-  ndbrequire(((storedPtr.p->storedCode == ZSCAN_PROCEDURE) ||
-               (storedPtr.p->storedCode == ZCOPY_PROCEDURE)));
-  /* Setup OperationRec with stored procedure AttrInfo section */
-  SegmentedSectionPtr sectionPtr;
-  getSection(sectionPtr, storedPtr.p->storedProcIVal);
-  Uint32 storedProcLen= sectionPtr.sz;
-
-  attrInfoIVal= storedPtr.p->storedProcIVal;
-  req_struct->attrinfo_len= storedProcLen;
-}
-
 void Dbtup::copyAttrinfo(Uint32 expectedLen,
                          Uint32 attrInfoIVal)
 {
-  Uint32 *inBuffer = &cinBuffer[0];
   ndbassert( expectedLen > 0 || attrInfoIVal == RNIL );
 
   if (expectedLen > 0)
   {
-    ndbassert( attrInfoIVal != RNIL );
-    
+    ndbassert(attrInfoIVal != RNIL);
+
     /* Check length in section is as we expect */
     SegmentedSectionPtr sectionPtr;
     getSection(sectionPtr, attrInfoIVal);
-    
+
     ndbrequire(sectionPtr.sz == expectedLen);
     ndbrequire(sectionPtr.sz < ZATTR_BUFFER_SIZE);
-    
+
     /* Copy attrInfo data into linear buffer */
     // TODO : Consider operating TUP out of first segment where
     // appropriate
-    copy(inBuffer, attrInfoIVal);
+    copy(cinBuffer, attrInfoIVal);
   }
 }
 
-Uint32 Dbtup::copyAttrinfo(Uint32 storedProcId)
+Uint32 Dbtup::copyAttrinfo(Uint32 storedProcId,
+                           bool interpretedFlag)
 {
-  Uint32 attrinfoVal;
-  KeyReqStruct req_struct(this);
-  getStoredProcAttrInfo(storedProcId, &req_struct, attrinfoVal);
-  copyAttrinfo(req_struct.attrinfo_len, attrinfoVal);
-  return req_struct.attrinfo_len;
+  /* Get stored procedure */
+  StoredProcPtr storedPtr;
+  storedPtr.i = storedProcId;
+  ndbrequire(c_storedProcPool.getValidPtr(storedPtr));
+  ndbrequire(((storedPtr.p->storedCode == ZSCAN_PROCEDURE) ||
+              (storedPtr.p->storedCode == ZCOPY_PROCEDURE)));
+
+  const Uint32 attrinfoIVal = storedPtr.p->storedProcIVal;
+  SectionReader reader(attrinfoIVal, getSectionSegmentPool());
+  const Uint32 readerLen = reader.getSize();
+
+  if (interpretedFlag)
+  {
+    jam();
+
+    // Read sectionPtr's
+    reader.getWords(&cinBuffer[0], 5);
+
+    // Read interpreted sections 0..3, up to the parameter section
+    const Uint32 readLen = cinBuffer[0] + cinBuffer[1] +
+                           cinBuffer[2] + cinBuffer[3];
+    Uint32 *pos = &cinBuffer[5];
+    reader.getWords(pos, readLen);
+    pos += readLen;
+
+    Uint32 paramOffs = 0;
+    Uint32 paramLen = 0;
+    if (cinBuffer[4] == 0)
+    {
+      // No parameters supplied in this attrInfo
+    }
+    else if (storedPtr.p->storedParamNo == 0)
+    {
+      // A single parameter, or the first of many, copy it out
+      paramLen = cinBuffer[4];
+      ndbrequire(reader.getWords(pos, paramLen));
+      pos += paramLen;
+      ndbassert(intmax_t{readerLen} == (pos - cinBuffer));
+    }
+    else
+    {
+      // A set of parameters, skip up to the one specified by 'ParamNo'
+      for (uint i=0; i < storedPtr.p->storedParamNo; i++)
+      {
+        reader.getWord(pos);
+        paramLen = *pos;
+        reader.step(paramLen-1);
+        paramOffs += paramLen;
+      }
+      // Copy out the parameter specified
+      reader.getWord(pos);
+      paramLen = *pos;
+      reader.getWords(pos+1, paramLen-1);
+      pos += paramLen;
+    }
+    cinBuffer[4] = paramLen;
+  }
+  else
+  {
+    jam();
+    ndbassert(storedPtr.p->storedParamNo == 0);
+
+    /* Copy attrInfo data into linear buffer */
+    reader.getWords(&cinBuffer[0], readerLen);
+  }
+
+  // By convention we return total length of storedProc, not just what we copied.
+  return readerLen;
+}
+
+void Dbtup::nextAttrInfoParam(Uint32 storedProcId)
+{
+  jam();
+
+  /* Get stored procedure */
+  StoredProcPtr storedPtr;
+  storedPtr.i = storedProcId;
+  ndbrequire(c_storedProcPool.getValidPtr(storedPtr));
+  ndbrequire(((storedPtr.p->storedCode == ZSCAN_PROCEDURE) ||
+               (storedPtr.p->storedCode == ZCOPY_PROCEDURE)));
+
+  storedPtr.p->storedParamNo++;
 }
 
 void
@@ -593,7 +644,7 @@ Dbtup::load_diskpage(Signal* signal,
     if (unlikely((flags & 7) == ZREFRESH))
     {
       jam();
-      /* Refresh of previously nonexistant DD tuple.
+      /* Refresh of previously nonexistent DD tuple.
        * No diskpage to load at commit time
        */
       regOperPtr->op_struct.bit_field.m_wait_log_buffer= 0;
@@ -1484,7 +1535,7 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
        if (accminupdateptr)
        {
          /**
-          * Update ACC local-key, once *everything* has completed succesfully
+          * Update ACC local-key, once *everything* has completed successfully
           */
          c_lqh->accminupdate(signal,
                              regOperPtr->userpointer,
@@ -1788,7 +1839,7 @@ Dbtup::setup_lcp_read_copy_tuple(KeyReqStruct* req_struct,
 /* ----------------------------- READ  ---------------------------- */
 /* ---------------------------------------------------------------- */
 int Dbtup::handleReadReq(Signal* signal,
-                         Operationrec* regOperPtr,
+                         Operationrec* _regOperPtr, // UNUSED, is member of req_struct
                          Tablerec* regTabPtr,
                          KeyReqStruct* req_struct)
 {
@@ -2599,13 +2650,57 @@ int Dbtup::handleInsertReq(Signal* signal,
       goto update_error;
     }
   }
-  
-  if (unlikely((res = updateAttributes(req_struct, &cinBuffer[0],
-                                       req_struct->attrinfo_len)) < 0))
+
+  if (unlikely(req_struct->interpreted_exec))
   {
     jam();
-    terrorCode = Uint32(-res);
-    goto update_error;
+
+    /* Interpreted insert only processes the finalUpdate section */
+    const Uint32 RinitReadLen= cinBuffer[0];
+    const Uint32 RexecRegionLen= cinBuffer[1];
+    const Uint32 RfinalUpdateLen= cinBuffer[2];
+    //const Uint32 RfinalRLen= cinBuffer[3];
+    //const Uint32 RsubLen= cinBuffer[4];
+
+    const Uint32 offset = 5 + RinitReadLen + RexecRegionLen;
+    req_struct->log_size = 0;
+
+    if (unlikely((res = updateAttributes(req_struct, &cinBuffer[offset],
+                                         RfinalUpdateLen)) < 0))
+    {
+      jam();
+      terrorCode = Uint32(-res);
+      goto update_error;
+    }
+
+    /**
+     * Send normal format AttrInfo back to LQH for
+     * propagation
+     */
+    req_struct->log_size = RfinalUpdateLen;
+    MEMCOPY_NO_WORDS(&clogMemBuffer[0],
+                     &cinBuffer[offset],
+                     RfinalUpdateLen);
+
+    if (unlikely(sendLogAttrinfo(signal,
+                                 req_struct,
+                                 RfinalUpdateLen,
+                                 regOperPtr.p) != 0))
+    {
+      jam();
+      goto update_error;
+    }
+  }
+  else
+  {
+    /* Normal insert */
+    if (unlikely((res = updateAttributes(req_struct, &cinBuffer[0],
+                                         req_struct->attrinfo_len)) < 0))
+    {
+      jam();
+      terrorCode = Uint32(-res);
+      goto update_error;
+    }
   }
 
   if (ERROR_INSERTED(4017))
@@ -3131,7 +3226,7 @@ Dbtup::handleRefreshReq(Signal* signal,
        if (accminupdateptr)
        {
          /**
-          * Update ACC local-key, once *everything* has completed succesfully
+          * Update ACC local-key, once *everything* has completed successfully
           */
          jamDebug();
          c_lqh->accminupdate(signal,
@@ -3342,7 +3437,7 @@ Dbtup::checkNullAttributes(KeyReqStruct * req_struct,
 /*       -----------------------------------------                  */
 /*       +   FINAL READ REGION                   +                  */
 /*       -----------------------------------------                  */
-/*       +   SUBROUTINE REGION                   +                  */
+/*       +   SUBROUTINE REGION (or parameter)    +                  */
 /*       -----------------------------------------                  */
 /*                                                                  */
 /* For read operations it only makes sense to first perform the     */
@@ -3409,11 +3504,15 @@ int Dbtup::interpreterStartLab(Signal* signal,
 
   /* All information to be logged/propagated to replicas
    * is generated from here on so reset the log word count
+   *
+   * Note that in case attrInfo contain multiple params for the
+   * interpreterCode, we will only copy one of them into the cinBuffer[].
+   * Thus, 'RtotalLen + 5' may be '<' than RattrinbufLen.
    */
   Uint32 RlogSize= req_struct->log_size= 0;
-  if (likely(((RtotalLen + 5) == RattrinbufLen) &&
+  if (likely(((RtotalLen + 5) <= RattrinbufLen) &&
              (RattrinbufLen >= 5) &&
-             (RattrinbufLen < ZATTR_BUFFER_SIZE)))
+             (RtotalLen + 5 < ZATTR_BUFFER_SIZE)))
   {
     /* ---------------------------------------------------------------- */
     // We start by checking consistency. We must have the first five
@@ -3688,8 +3787,7 @@ Dbtup::brancher(Uint32 TheInstruction, Uint32 TprogramCounter)
 
 const Uint32 *
 Dbtup::lookupInterpreterParameter(Uint32 paramNo,
-                                  const Uint32 * subptr,
-                                  Uint32 sublen) const
+                                  const Uint32 *subptr) const
 {
   /**
    * The parameters...are stored in the subroutine section
@@ -3697,24 +3795,26 @@ Dbtup::lookupInterpreterParameter(Uint32 paramNo,
    * WORD2         WORD3       WORD4         WORD5
    * [ P0 HEADER ] [ P0 DATA ] [ P1 HEADER ] [ P1 DATA ]
    *
-   *
    * len=4 <=> 1 word
    */
-  Uint32 pos = 0;
+  const Uint32 sublen = *subptr;
+  ndbassert(sublen > 0);
+
+  Uint32 pos = 1;
   while (paramNo)
   {
     const Uint32 * head = subptr + pos;
-    Uint32 len = AttributeHeader::getDataSize(* head);
+    const Uint32 len = AttributeHeader::getDataSize(* head);
     paramNo --;
     pos += 1 + len;
     if (unlikely(pos >= sublen))
-      return 0;
+      return nullptr;
   }
 
   const Uint32 * head = subptr + pos;
-  Uint32 len = AttributeHeader::getDataSize(* head);
+  const Uint32 len = AttributeHeader::getDataSize(* head);
   if (unlikely(pos + 1 + len > sublen))
-    return 0;
+    return nullptr;
 
   return head;
 }
@@ -4169,7 +4269,6 @@ int Dbtup::interpreterNextLab(Signal* signal,
 	  
 	  Uint32 TleftType= TregMemBuffer[theRegister];
 	  Int64 Tleft0= * (Int64*)(TregMemBuffer + theRegister + 2);
-	  
 
 	  if ((TrightType | TleftType) != 0)
           {
@@ -4187,7 +4286,7 @@ int Dbtup::interpreterNextLab(Signal* signal,
 	}
 
       case Interpreter::BRANCH_ATTR_OP_ATTR:
-      case Interpreter::BRANCH_ATTR_OP_ARG_2:
+      case Interpreter::BRANCH_ATTR_OP_PARAM:
       case Interpreter::BRANCH_ATTR_OP_ARG:{
         jamDebug();
         const Uint32 ins2 = TcurrentProgram[TprogramCounter];
@@ -4254,15 +4353,18 @@ int Dbtup::interpreterNextLab(Signal* signal,
           step = argLen;
           s2 = (char*)&TcurrentProgram[TprogramCounter+1];
         }
-        else if (opCode == Interpreter::BRANCH_ATTR_OP_ARG_2)
+        else if (opCode == Interpreter::BRANCH_ATTR_OP_PARAM)
         {
           // Compare ATTR with a parameter
           jamDebug();
-          Uint32 paramNo = Interpreter::getBranchCol_ParamNo(ins2);
-          const Uint32 * paramptr = lookupInterpreterParameter(paramNo,
-                                                               subroutineProg,
-                                                               TsubroutineLen);
-          if (unlikely(paramptr == 0))
+          ndbassert(req_struct != nullptr);
+          ndbassert(req_struct->operPtrP != nullptr);
+
+          const Uint32 paramNo = Interpreter::getBranchCol_ParamNo(ins2);
+          const Uint32 *paramPos = subroutineProg;
+          const Uint32 *paramptr = lookupInterpreterParameter(paramNo,
+                                                              paramPos);
+          if (unlikely(paramptr == nullptr))
           {
             jam();
             terrorCode = 99; // TODO
@@ -4639,7 +4741,7 @@ int Dbtup::interpreterNextLab(Signal* signal,
  * dst_off_ptr where to write attribute offsets
  * src         pointer to packed attributes
  * tabDesc     array of attribute descriptors (used for getting max size)
- * no_of_attr  no of atributes to expand
+ * no_of_attr  no of attributes to expand
  */
 static
 Uint32*
@@ -4737,7 +4839,7 @@ Dbtup::expand_tuple(KeyReqStruct* req_struct,
          * from handle_lcp_keep_commit. In this case we are currently
          * performing a DELETE operation. This operation is the final
          * operation that will be committed. It could very well have
-         * been preceeded by an UPDATE operation that did set the
+         * been preceded by an UPDATE operation that did set the
          * MM_GROWN bit. In this case it is important to get the original
          * length from the end of the varsize part and not the page
          * entry length which is essentially the meaning of the MM_GROWN
@@ -5374,7 +5476,7 @@ Dbtup::handle_size_change_after_update(KeyReqStruct* req_struct,
       if (copy_bits & Tuple_header::COPY_TUPLE)
       {
         jamDebug();
-        c_page_pool.getPtr(pagePtr, ref.m_page_no);
+        ndbrequire(c_page_pool.getPtr(pagePtr, ref.m_page_no));
         pageP = (Var_page*)pagePtr.p;
       }
       alloc = pageP->get_entry_len(idx);
@@ -5509,7 +5611,7 @@ Dbtup::optimize_var_part(KeyReqStruct* req_struct,
   Uint32 idx = ref.m_page_idx;
 
   Ptr<Page> pagePtr;
-  c_page_pool.getPtr(pagePtr, ref.m_page_no);
+  ndbrequire(c_page_pool.getPtr(pagePtr, ref.m_page_no));
 
   Var_page* pageP = (Var_page*)pagePtr.p;
   Uint32 var_part_size = pageP->get_entry_len(idx);
@@ -5970,7 +6072,7 @@ Dbtup::nr_delete_page_callback(Signal* signal,
 			       Uint32 userpointer, Uint32 page_id)//unused
 {
   Ptr<GlobalPage> gpage;
-  m_global_page_pool.getPtr(gpage, page_id);
+  ndbrequire(m_global_page_pool.getPtr(gpage, page_id));
   PagePtr pagePtr((Tup_page*)gpage.p, gpage.i);
   disk_page_set_dirty(pagePtr);
   Dblqh::Nr_op_info op;
@@ -6041,7 +6143,7 @@ Dbtup::nr_delete_log_buffer_callback(Signal* signal,
     tablePtr.p->m_offsets[DD].m_fix_header_size - 1;
   
   Ptr<GlobalPage> gpage;
-  m_global_page_pool.getPtr(gpage, op.m_page_id);
+  ndbrequire(m_global_page_pool.getPtr(gpage, op.m_page_id));
   PagePtr pagePtr((Tup_page*)gpage.p, gpage.i);
 
   /**

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -54,16 +54,14 @@
 #include <signaldata/LocalSysfile.hpp>
 #include <signaldata/SyncThreadViaReqConf.hpp>
 #include <signaldata/TakeOverTcConf.hpp>
+#include <signaldata/TrpKeepAlive.hpp>
 #include <signaldata/GetNumMultiTrp.hpp>
 #include <signaldata/Sync.hpp>
 #include <ndb_version.h>
 #include <OwnProcessInfo.hpp>
 #include <NodeInfo.hpp>
 #include <NdbSleep.h>
-#ifdef _WIN32
-#include <ws2tcpip.h>
-#endif
-
+#include "portlib/NdbTCP.h"
 
 #include <TransporterRegistry.hpp> // Get connect address
 
@@ -386,6 +384,12 @@ void Qmgr::execCONTINUEB(Signal* signal)
     send_switch_multi_transporter(signal, signal->theData[1], true);
     return;
   }
+  case ZSEND_TRP_KEEP_ALIVE:
+  {
+    jam();
+    send_trp_keep_alive(signal);
+    return;
+  }
   default:
     jam();
     // ZCOULD_NOT_OCCUR_ERROR;
@@ -496,7 +500,7 @@ Qmgr::execREAD_CONFIG_REQ(Signal* signal)
                              globalData.ndbMtTcThreads));
     }
     /**
-     * Whatever value this node has choosen, we will never be able to use
+     * Whatever value this node has chosen, we will never be able to use
      * more transporters than the other node permits as well. This will be
      * established in the setup phase of multi transporters.
      */
@@ -662,7 +666,7 @@ Qmgr::execDIH_RESTARTREF(Signal*signal)
   ndbrequire(signal->getNoOfSections() == 1);
   SectionHandle handle(this, signal);
   SegmentedSectionPtr ptr;
-  handle.getSection(ptr, 0);
+  ndbrequire(handle.getSection(ptr, 0));
   ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
   c_start.m_no_nodegroup_nodes.clear();
   copy(c_start.m_no_nodegroup_nodes.rep.data, ptr);
@@ -682,7 +686,7 @@ Qmgr::execDIH_RESTARTCONF(Signal*signal)
   ndbrequire(signal->getNoOfSections() == 1);
   SectionHandle handle(this, signal);
   SegmentedSectionPtr ptr;
-  handle.getSection(ptr, 0);
+  ndbrequire(handle.getSection(ptr, 0));
   ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
   c_start.m_no_nodegroup_nodes.clear();
   copy(c_start.m_no_nodegroup_nodes.rep.data, ptr);
@@ -724,7 +728,7 @@ Qmgr::execREAD_LOCAL_SYSFILE_CONF(Signal *signal)
      * We set gci = 1 and rely here on that gci here is simply used
      * as a tool to decide which nodes can be started up on their
      * own and which node to choose as master node. Only nodes
-     * where m_latest_gci is set to a real GCI can be choosen as
+     * where m_latest_gci is set to a real GCI can be chosen as
      * master nodes.
      */
     g_eventLogger->info("Node not restorable on its own, now starting the"
@@ -777,6 +781,13 @@ void Qmgr::setCCDelay(UintR aCCDelay)
     m_connectivity_check.m_timer.setDelay(aCCDelay < 10 ? 10 : aCCDelay);
     m_connectivity_check.m_timer.reset(now);
   }
+}
+
+void Qmgr::setTrpKeepAliveSendDelay(Uint32 delay)
+{
+  const NDB_TICKS now = NdbTick_getCurrentTicks();
+  ka_send_timer.setDelay(delay);
+  ka_send_timer.reset(now);
 }
 
 void Qmgr::execCONNECT_REP(Signal* signal)
@@ -928,7 +939,7 @@ Qmgr::execREAD_NODESCONF(Signal* signal)
     ndbrequire(signal->getNoOfSections() == 1);
     SegmentedSectionPtr ptr;
     SectionHandle handle(this, signal);
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
     ndbrequire(ptr.sz == 5 * NdbNodeBitmask::Size);
     copy((Uint32*)&readNodes->definedNodes.rep.data, ptr);
     releaseSections(handle);
@@ -1007,7 +1018,7 @@ Qmgr::execREAD_NODESREF(Signal* signal)
  * 
  * The protocol starts by the new node sending CM_REGREQ to all nodes it is
  * connected to. Only the president will respond to this message. We could
- * have a situation where there currently isn't a president choosen. In this
+ * have a situation where there currently isn't a president chosen. In this
  * case an election is held whereby a new president is assigned. In the rest
  * of this comment we assume that a president already exists.
  *
@@ -1109,7 +1120,7 @@ Qmgr::execREAD_NODESREF(Signal* signal)
 void Qmgr::execCM_INFOCONF(Signal* signal) 
 {
   /**
-   * Open communcation to all DB nodes
+   * Open communication to all DB nodes
    */
   signal->theData[0] = 0; // no answer
   signal->theData[1] = 0; // no id
@@ -1276,6 +1287,8 @@ void Qmgr::execCM_REGREQ(Signal* signal)
   addNodePtr.i = cmRegReq->nodeId;
   Uint32 gci = 1;
   Uint32 start_type = ~0;
+
+  ndbrequire(cmRegReq->nodeId < MAX_NODES);
 
   if (!c_connectedNodes.get(cmRegReq->nodeId))
   {
@@ -1495,7 +1508,7 @@ void Qmgr::execCM_REGREQ(Signal* signal)
     LinearSectionPtr lsptr[3];
 
     // 8192 is the size of signal->theData array.
-    STATIC_ASSERT(CmRegConf::SignalLength_v1 + NdbNodeBitmask::Size <=
+    static_assert(CmRegConf::SignalLength_v1 + NdbNodeBitmask::Size <=
                   NDB_ARRAY_SIZE(signal->theData));
     c_clusterNodes.copyto(packed_nodebitmask_length,
                           &signal->theData[CmRegConf::SignalLength_v1]);
@@ -1649,7 +1662,7 @@ void Qmgr::execCM_REGCONF(Signal* signal)
     ndbrequire(ndbd_send_node_bitmask_in_section(cmRegConf->presidentVersion));
     SectionHandle handle(this, signal);
     SegmentedSectionPtr ptr;
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
     ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
     copy(allNdbNodes.rep.data, ptr);
     releaseSections(handle);
@@ -1981,6 +1994,8 @@ void Qmgr::execCM_REGREF(Signal* signal)
 
   CmRegRef* ref = (CmRegRef*)signal->getDataPtr();
   UintR TaddNodeno = ref->nodeId;
+  ndbrequire(TaddNodeno < MAX_NDB_NODES);
+
   UintR TrefuseReason = ref->errorCode;
   Uint32 candidate = ref->presidentCandidate;
   Uint32 node_gci = 1;
@@ -2001,7 +2016,7 @@ void Qmgr::execCM_REGREF(Signal* signal)
     ndbrequire(signal->getLength() >= CmRegRef::SignalLength);
     SectionHandle handle(this, signal);
     SegmentedSectionPtr ptr;
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
 
     ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
     copy(skip_nodes.rep.data, ptr);
@@ -2391,7 +2406,7 @@ Qmgr::check_startup(Signal* signal)
         goto missinglog;
       }
     }
-    // Fall through
+    [[fallthrough]];
     case CheckNodeGroups::Win:
     {
       jam();
@@ -2836,7 +2851,7 @@ Qmgr::sendCmAckAdd(Signal * signal, Uint32 nodeId, CmAdd::RequestType type){
 4.4.11 CM_ADD */
 /**--------------------------------------------------------------------------
  * Prepare a running node to add a new node to the cluster. The running node 
- * will change phase of the new node fron ZINIT to ZWAITING. The running node 
+ * will change phase of the new node from ZINIT to ZWAITING. The running node 
  * will also mark that we have received a prepare. When the new node has sent 
  * us nodeinfo we can send an acknowledgement back to the president. When all 
  * running nodes has acknowledged the new node, the president will send a 
@@ -3274,7 +3289,7 @@ void Qmgr::findNeighbours(Signal* signal, Uint32 from)
 void Qmgr::initData(Signal* signal) 
 {
   // catch-all for missing initializations
-  memset(&arbitRec, 0, sizeof(arbitRec));
+  arbitRec = ArbitRec();
 
   /**
    * Timeouts
@@ -3554,6 +3569,14 @@ void Qmgr::timerHandlingLab(Signal* signal)
     apiHbHandlingLab(signal, TcurrentTime);
   }
 
+  if (ka_send_timer.getDelay() > 0 &&
+      ka_send_timer.check(TcurrentTime))
+  {
+    jam();
+    ka_send_timer.reset(TcurrentTime);
+    send_trp_keep_alive_start(signal);
+  }
+
   Ndb_GetRUsage(&m_timer_handling_rusage, false);
 
   //--------------------------------------------------
@@ -3816,7 +3839,7 @@ void Qmgr::checkStartInterface(Signal* signal, NDB_TICKS now)
             if (nodePtr.p->failState == WAITING_FOR_API_FAILCONF)
             {
               jam();
-              static_assert(NDB_ARRAY_SIZE(nodePtr.p->m_failconf_blocks) == 5, "");
+              static_assert(NDB_ARRAY_SIZE(nodePtr.p->m_failconf_blocks) == 5);
               BaseString::snprintf(buf, sizeof(buf),
                                    "  Waiting for blocks: %u %u %u %u %u",
                                    nodePtr.p->m_failconf_blocks[0],
@@ -4112,7 +4135,7 @@ void Qmgr::execNDB_FAILCONF(Signal* signal)
    * the failed node
    *
    * NOTE: This is sent from all nodes, as otherwise we would need
-   *       take-over if cpresident dies befor sending this
+   *       take-over if cpresident dies before sending this
    */
   NFCompleteRep * const nfComp = (NFCompleteRep *)&signal->theData[0];
   nfComp->blockNo = QMGR_REF;
@@ -4639,7 +4662,7 @@ Qmgr::execNODE_STARTED_REP(Signal *signal)
     /**
      * We will send an unsolicited API_REGCONF to the API node, this makes the
      * API node aware of our existence much faster (without it can wait up to
-     * the lenght of a heartbeat DB-API period. For rolling restarts and other
+     * the length of a heartbeat DB-API period. For rolling restarts and other
      * similar actions this can easily cause the API to not have any usable
      * DB connections at all. This unsolicited response minimises this window
      * of unavailability to zero for all practical purposes.
@@ -4951,7 +4974,7 @@ void Qmgr::failReportLab(Signal* signal, Uint16 aFailedNode,
 	  ndbrequire(ndbd_send_node_bitmask_in_section(senderVersion));
 	  SectionHandle handle(this, signal);
 	  SegmentedSectionPtr ptr;
-	  handle.getSection(ptr, 0);
+          ndbrequire(handle.getSection(ptr, 0));
 
 	  ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
           copy(part.rep.data, ptr);
@@ -5110,7 +5133,7 @@ void Qmgr::execPREP_FAILREQ(Signal* signal)
     ndbrequire(ndbd_send_node_bitmask_in_section(senderVersion));
     SectionHandle handle(this, signal);
     SegmentedSectionPtr ptr;
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
     ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
     copy(nodes.rep.data, ptr);
     releaseSections(handle);
@@ -5518,7 +5541,7 @@ void Qmgr::execPREP_FAILREF(Signal* signal)
     ndbrequire(ndbd_send_node_bitmask_in_section(senderVersion));
     SegmentedSectionPtr ptr;
     SectionHandle handle(this, signal);
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
     ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
     copy(cprepFailedNodes.rep.data, ptr);
     releaseSections(handle);
@@ -6292,7 +6315,7 @@ Uint32 Qmgr::getArbitTimeout()
     break;
   case ARBIT_INIT:              // not used
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_FIND:
     jam();
     /* This timeout will be used only to print out a warning
@@ -6301,7 +6324,7 @@ Uint32 Qmgr::getArbitTimeout()
     return 60000;
   case ARBIT_PREP1:
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_PREP2:
     jam();
     return 1000 + cnoOfNodes * Uint32(hb_send_timer.getDelay());
@@ -6367,13 +6390,13 @@ Qmgr::handleArbitApiFail(Signal* signal, Uint16 nodeId)
     break;
   case ARBIT_PREP1:		// start from beginning
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_PREP2:
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_START:
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_RUN:
     if (cpresident == getOwnNodeId()) {
       jam();
@@ -6415,13 +6438,13 @@ Qmgr::handleArbitNdbAdd(Signal* signal, Uint16 nodeId)
     break;
   case ARBIT_INIT:		// start from beginning
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_FIND:
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_PREP1:
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_PREP2:
     jam();
     arbitRec.state = ARBIT_INIT;
@@ -6431,7 +6454,7 @@ Qmgr::handleArbitNdbAdd(Signal* signal, Uint16 nodeId)
     break;
   case ARBIT_START:		// process in RUN state
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_RUN:
     jam();
     arbitRec.newMask.set(nodeId);
@@ -6569,7 +6592,7 @@ Qmgr::handleArbitCheck(Signal* signal)
     goto crashme;
   case ArbitCode::WinNodes:
     jam();
-    // Fall through
+    [[fallthrough]];
   case ArbitCode::WinGroups:
     jam();
     if (arbitRec.state == ARBIT_RUN)
@@ -6685,7 +6708,7 @@ Qmgr::runArbitThread(Signal* signal)
     break;
   case ARBIT_PREP1:
     jam();
-    // Fall through
+    [[fallthrough]];
   case ARBIT_PREP2:
     jam();
     stateArbitPrep(signal);
@@ -6931,7 +6954,7 @@ Qmgr::execARBIT_PREPREQ(Signal* signal)
     break;
   case ArbitCode::PrepPart2:    // non-president enters RUN state
     jam();
-    // Fall through
+    [[fallthrough]];
   case ArbitCode::PrepAtrun:
     jam();
     arbitRec.node = sd->node;
@@ -7690,6 +7713,20 @@ Qmgr::execAPI_BROADCAST_REP(Signal* signal)
 }
 
 void
+Qmgr::execTRP_KEEP_ALIVE(Signal* signal)
+{
+  /*
+   * This signal is sent via explicit transporter and signal may come in other
+   * order than other signals from same sender.
+   * That is ok since this signal is only there to generate traffic such that
+   * connection is not taken as idle connection and disconnected if one run in
+   * an environment there connection traffics are monitored and disconnected
+   * if idle for too long.
+   */
+  jamEntry();
+}
+
+void
 Qmgr::execNODE_FAILREP(Signal * signal)
 {
   jamEntry();
@@ -7700,7 +7737,7 @@ Qmgr::execNODE_FAILREP(Signal * signal)
         getNodeInfo(refToNode(signal->getSendersBlockRef())).m_version));
     SegmentedSectionPtr ptr;
     SectionHandle handle(this, signal);
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
     memset(nodeFail->theNodes, 0, sizeof(nodeFail->theNodes));
     copy(nodeFail->theNodes, ptr);
     releaseSections(handle);
@@ -8159,7 +8196,7 @@ Qmgr::execSTOP_REQ(Signal* signal)
     jam();
     SectionHandle handle(this, signal);
     SegmentedSectionPtr ptr;
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
     ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
     copy(c_stopReq.nodes.rep.data, ptr);
     releaseSections(handle);
@@ -8935,6 +8972,7 @@ Qmgr::execPROCESSINFO_REP(Signal *signal)
   SectionHandle handle(this, signal);
   SegmentedSectionPtr pathSectionPtr, hostSectionPtr;
 
+  ndbrequire(report->node_id < MAX_NODES);
   ProcessInfo * processInfo = getProcessInfo(report->node_id);
   if(processInfo)
   {
@@ -8985,7 +9023,7 @@ Qmgr::execISOLATE_ORD(Signal* signal)
     jam();
     ndbrequire(num_sections == 1);
     SegmentedSectionPtr ptr;
-    handle.getSection(ptr, 0);
+    ndbrequire(handle.getSection(ptr, 0));
     copy(sig->nodesToIsolate, ptr);
     ndbrequire(ptr.sz <= NdbNodeBitmask::Size);
     sz = ptr.sz;
@@ -9057,7 +9095,7 @@ Qmgr::execISOLATE_ORD(Signal* signal)
   case IsolateOrd::IS_BROADCAST:
   {
     jam();
-    /* Received reqest, delay */
+    /* Received request, delay */
     sig->isolateStep = IsolateOrd::IS_DELAY;
     
     if (sig->delayMillis > 0)
@@ -9073,7 +9111,7 @@ Qmgr::execISOLATE_ORD(Signal* signal)
       return;
     }
   }
-  // Fall through
+  [[fallthrough]];
   case IsolateOrd::IS_DELAY:
   {
     jam();
@@ -9125,12 +9163,11 @@ Qmgr::execNODE_STATE_REP(Signal* signal)
   jam();
   const NodeState prevState = getNodeState();
   SimulatedBlock::execNODE_STATE_REP(signal);
+  const NodeState newState = getNodeState();
 
   /* Check whether we are changing state */
-  const Uint32 prevStartLevel = prevState.startLevel;
-  const Uint32 newStartLevel = getNodeState().startLevel;
-
-  if (newStartLevel != prevStartLevel)
+  if (prevState.startLevel != newState.startLevel ||
+      prevState.nodeGroup != newState.nodeGroup)
   {
     jam();
     /* Inform APIs */
@@ -9668,6 +9705,72 @@ Qmgr::create_multi_transporter(NodeId node_id)
   DEB_MULTI_TRP(("Create multi trp for node %u", node_id));
   globalTransporterRegistry.createMultiTransporter(node_id,
                                                    m_num_multi_trps);
+}
+
+/*
+ * TRP_KEEP_ALIVE
+ */
+
+void Qmgr::send_trp_keep_alive_start(Signal* signal)
+{
+  jam();
+  c_keepalive_seqnum++;
+  if (c_keep_alive_send_in_progress)
+  {
+    jam();
+    g_eventLogger->warning("Sending keep alive messages on all links is slow, "
+                           "skipping one round (%u) of sending.",
+                           c_keepalive_seqnum);
+    return;
+  }
+  c_keep_alive_send_in_progress = true;
+  constexpr Uint32 node_id = 0;
+  signal->theData[0] = ZSEND_TRP_KEEP_ALIVE;
+  signal->theData[1] = node_id;
+  signal->theData[2] = c_keepalive_seqnum;
+  send_trp_keep_alive(signal);
+}
+
+void Qmgr::send_trp_keep_alive(Signal* signal)
+{
+  jam();
+
+  Uint32 node_id = signal->theData[1];
+  Uint32 keepalive_seqnum = signal->theData[2];
+
+  if ((node_id = c_clusterNodes.find(node_id)) != NdbNodeBitmask::NotFound)
+  {
+    jam();
+    NodeInfo nodeInfo = getNodeInfo(node_id);
+    ndbrequire(nodeInfo.m_type == NodeInfo::DB);
+    if (node_id != getOwnNodeId() &&
+        nodeInfo.m_version != 0 &&
+        ndbd_support_trp_keep_alive(nodeInfo.m_version))
+    {
+      jam();
+
+      const BlockReference qmgr_ref = calcQmgrBlockRef(node_id);
+
+      TrpKeepAlive* sig = reinterpret_cast<TrpKeepAlive*>(signal->theData);
+      sig->senderRef = reference();
+      sig->keepalive_seqnum = keepalive_seqnum;
+      Signal25* signal25 = reinterpret_cast<Signal25*>(signal);
+      sendSignalOverAllLinks(qmgr_ref, GSN_TRP_KEEP_ALIVE, signal25, 2, JBB);
+    }
+    node_id++;
+  }
+
+  if (node_id == NdbNodeBitmask::NotFound)
+  {
+    jam();
+    c_keep_alive_send_in_progress = false;
+    return;
+  }
+
+  signal->theData[0] = ZSEND_TRP_KEEP_ALIVE;
+  signal->theData[1] = node_id;
+  signal->theData[2] = keepalive_seqnum;
+  sendSignal(reference(), GSN_CONTINUEB, signal, 3, JBA);
 }
 
 #include "../../../common/transporter/Transporter.hpp"

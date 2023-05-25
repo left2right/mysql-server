@@ -1,7 +1,7 @@
 include/master-slave.inc [rpl_server_count=3]
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection master]
 #
 # 1. Insert data on server1 and verify that its synced to the server 2.
@@ -11,9 +11,6 @@ CREATE TABLE t1 (a INT) ENGINE = InnoDB;
 INSERT INTO t1 VALUES (1);
 include/rpl_sync.inc
 [connection server_2]
-SET SESSION sql_log_bin= 0;
-call mtr.add_suppression("The master's UUID has changed, although this should not happen unless you have changed it manually. The old UUID was.*");
-SET SESSION sql_log_bin= 1;
 include/assert.inc ['There is one row on replica']
 #
 # 2. Verify Asynchronous Replication Connection Failover is initially
@@ -26,8 +23,7 @@ include/assert.inc ['Asynchronous Replication Connection Failover is disabled']
 #    count and retry time to 2 and verify its enabled in
 #    performance_schema.replication_connection_configuration.
 #
-SET @debug_saved= @@GLOBAL.DEBUG;
-SET GLOBAL debug = '+d,async_conn_failover_disable_weight_check';
+# Adding debug point 'async_conn_failover_disable_weight_check' to @@GLOBAL.debug
 include/stop_slave.inc
 CHANGE REPLICATION SOURCE TO SOURCE_CONNECT_RETRY=1, SOURCE_RETRY_COUNT=2, SOURCE_CONNECTION_AUTO_FAILOVER=1;
 include/start_slave.inc
@@ -47,7 +43,7 @@ include/assert.inc ['There are three rows in performance_schema.replication_asyn
 #    Reconnect to server 2 and start replica on it.
 #
 include/rpl_start_server.inc [server_number=2]
-SET GLOBAL debug = '+d,async_conn_failover_crash';
+# Adding debug point 'async_conn_failover_crash' to @@GLOBAL.debug
 include/rpl_stop_server.inc [server_number=1]
 include/rpl_reconnect.inc
 include/start_slave.inc
@@ -61,7 +57,6 @@ include/assert_grep.inc [Assert that the IO thread tried five times connecting t
 # 7. Clean up
 #
 [connection server_2]
-SET @@GLOBAL.DEBUG= @debug_saved;
 include/stop_slave.inc
 include/rpl_reset_slave.inc
 SELECT asynchronous_connection_failover_delete_source('', '127.0.0.1', SERVER_MYPORT_3, '');;

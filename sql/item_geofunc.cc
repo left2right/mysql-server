@@ -1,4 +1,4 @@
-/* Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -54,6 +54,7 @@
 #include "my_compiler.h"  // MY_ATTRIBUTE
 #include "my_config.h"
 #include "my_dbug.h"
+#include "sql-common/json_dom.h"  // Json_wrapper
 #include "sql/current_thd.h"
 #include "sql/dd/cache/dictionary_client.h"
 #include "sql/dd/types/spatial_reference_system.h"
@@ -80,7 +81,6 @@
 #include "sql/gis/wkb.h"
 #include "sql/gstream.h"  // Gis_read_stream
 #include "sql/item_geofunc_internal.h"
-#include "sql/json_dom.h"  // Json_wrapper
 #include "sql/options_parser.h"
 #include "sql/parse_tree_node_base.h"  // Parse_context
 #include "sql/psi_memory_key.h"
@@ -937,8 +937,7 @@ String *Item_func_geomfromgeojson::val_str(String *buf) {
     my_error(ER_INVALID_GEOJSON_UNSPECIFIED, MYF(0), func_name());
     return error_str();
   }
-  const Json_object *root_obj =
-      down_cast<const Json_object *>(wr.to_dom(current_thd));
+  const Json_object *root_obj = down_cast<const Json_object *>(wr.to_dom());
 
   /*
     Set the default SRID to 4326. This will be overwritten if a valid CRS is
@@ -1771,7 +1770,7 @@ bool Item_func_geomfromgeojson::parse_crs_object(
   @param member_name Name of the member we are validating, so that the error
          returned to the user is more informative.
   @param expected_type Expected type of the member.
-  @param allow_null If we shold allow the member to have JSON null value.
+  @param allow_null If we should allow the member to have JSON null value.
   @param[out] was_null This will be set to true if the provided member had a
               JSON null value. Is only affected if allow_null is set to true.
 
@@ -1864,7 +1863,7 @@ bool Item_func_geomfromgeojson::fix_fields(THD *thd, Item **ref) {
         return true;
       }
     }
-      // Fall through.
+      [[fallthrough]];
     case 2: {
       // Validate options argument
       if (args[1]->propagate_type(thd, MYSQL_TYPE_LONGLONG)) return true;
@@ -1873,7 +1872,7 @@ bool Item_func_geomfromgeojson::fix_fields(THD *thd, Item **ref) {
         return true;
       }
     }
-      // Fall through.
+      [[fallthrough]];
     case 1: {
       /*
         Validate GeoJSON argument type. We do not allow binary data as GeoJSON
@@ -2334,7 +2333,7 @@ bool geometry_to_json(Json_wrapper *wr, String *swkb,
   }
 
   /*
-    append_geometry() will go through the WKB and call itself recursivly if
+    append_geometry() will go through the WKB and call itself recursively if
     geometry collections are encountered. For each recursive call, a new MBR
     is created. The function will fail if it encounters invalid data in the
     WKB input.
@@ -2567,7 +2566,7 @@ bool Item_func_geohash::check_valid_latlong_type(Item *arg) {
   We also do type checking on the geometry object, as well as out-of-range
   check for both longitude, latitude and geohash length.
 
-  If an expection is raised, null_value will not be set. If a null argument
+  If an exception is raised, null_value will not be set. If a null argument
   was detected, null_value will be set to true.
 
   @return false if class variables was populated, or true if the function
@@ -2831,7 +2830,7 @@ bool Item_func_geohash::fix_fields(THD *thd, Item **ref) {
   @param target_value Latitude or longitude value supplied as argument
   by the user.
   @param char_value The character we want to set the bit on.
-  @param bit_number Wich bit number in char_value to set.
+  @param bit_number Which bit number in char_value to set.
 */
 void Item_func_geohash::encode_bit(double *upper_value, double *lower_value,
                                    double target_value, char *char_value,
@@ -3026,7 +3025,7 @@ bool Item_func_latlongfromgeohash::decode_geohash(
                          longitude_value + longitude_accuracy);
 
   /*
-    Ensure that the rounded results are not ouside of the valid range. As
+    Ensure that the rounded results are not outside of the valid range. As
     written in the specification:
 
       Final rounding should be done carefully in a way that
@@ -3659,7 +3658,7 @@ class Point_accumulator : public WKB_scanner_event_handler {
     }
   }
 
-  void on_wkb_end(const void *wkb MY_ATTRIBUTE((unused))) override {
+  void on_wkb_end(const void *wkb [[maybe_unused]]) override {
     if (pt_start)
       assert(static_cast<const char *>(pt_start) + POINT_DATA_SIZE == wkb);
 
@@ -3765,7 +3764,7 @@ class Geometry_grouper : public WKB_scanner_event_handler {
 };
 
 /*
-  Compute a geometry collection's centroid in demension decreasing order:
+  Compute a geometry collection's centroid in dimension decreasing order:
   If it has polygons, make them a multipolygon and compute its centroid as the
   result; otherwise compose a multilinestring and compute its centroid as the
   result; otherwise compose a multipoint and compute its centroid as the result.
@@ -4262,7 +4261,7 @@ bool Item_func_pointfromgeohash::fix_fields(THD *thd, Item **ref) {
     Check for valid type in SRID argument.
 
     We will allow all integer types, and strings since some connectors will
-    covert integers to strings. Binary data is not allowed.
+    convert integers to strings. Binary data is not allowed.
 
     PARAM_ITEM and INT_ITEM checks are to allow prepared statements and usage of
     user-defined variables respectively.
@@ -4535,28 +4534,6 @@ BG_geometry_collection::BG_geometry_collection()
       m_geosdata(key_memory_Geometry_objects_data) {}
 
 /**
-  Convert this into a Gis_geometry_collection object.
-  @param geodata Stores the result object's WKB data.
-  @return The Gis_geometry_collection object created from this object.
- */
-Gis_geometry_collection *BG_geometry_collection::as_geometry_collection(
-    String *geodata) const {
-  if (m_geos.size() == 0) return empty_collection(geodata, m_srid);
-
-  Gis_geometry_collection *gc = nullptr;
-
-  for (Geometry_list::const_iterator i = m_geos.begin(); i != m_geos.end();
-       ++i) {
-    if (gc == nullptr)
-      gc = new Gis_geometry_collection(*i, geodata);
-    else
-      gc->append_geometry(*i, geodata);
-  }
-
-  return gc;
-}
-
-/**
   Store a Geometry object into this collection. If it's a geometry collection,
   flatten it and store its components into this collection, so that no
   component is a geometry collection.
@@ -4738,8 +4715,7 @@ longlong Item_func_st_issimple::val_int() {
 
   String backing_arg_wkb;
   String *arg_wkb = args[0]->val_str(&backing_arg_wkb);
-
-  // Note: Item.null_value is valid only after Item.val_* has been invoked.
+  if (current_thd->is_error()) return error_int();
 
   if (args[0]->null_value) {
     null_value = true;
@@ -4806,6 +4782,7 @@ longlong Item_func_isvalid::val_int() {
 
   String tmp;
   String *swkb = args[0]->val_str(&tmp);
+  if (current_thd->is_error()) return error_int();
 
   if ((null_value = args[0]->null_value)) {
     assert(is_nullable());
@@ -4993,6 +4970,7 @@ double Item_func_coordinate_observer::val_real() {
   assert(fixed);
   String tmp_str;
   String *swkb = args[0]->val_str(&tmp_str);
+  if (current_thd->is_error()) return error_real();
 
   if ((null_value = (args[0]->null_value))) {
     assert(is_nullable());
@@ -5736,11 +5714,11 @@ double Item_func_st_distance_sphere::val_real() {
 
   String backing_arg_wkb1;
   String *arg_wkb1 = args[0]->val_str(&backing_arg_wkb1);
+  if (current_thd->is_error()) return error_real();
 
   String backing_arg_wkb2;
   String *arg_wkb2 = args[1]->val_str(&backing_arg_wkb2);
-
-  // Note: Item.null_value is valid only after Item.val_* has been invoked.
+  if (current_thd->is_error()) return error_real();
 
   if (args[0]->null_value || args[1]->null_value) {
     null_value = true;
@@ -5793,7 +5771,7 @@ double Item_func_st_distance_sphere::val_real() {
     double a = srs1->semi_major_axis();
     double b = srs1->semi_minor_axis();
     if (a == b)
-      // Avoid possible loss of precission.
+      // Avoid possible loss of precision.
       sphere_radius = a;
     else
       // Mean radius, as defined by the IUGG
@@ -5825,6 +5803,62 @@ double Item_func_st_distance_sphere::val_real() {
   assert(!null_value);
 
   return result;
+}
+
+String *Item_func_st_intersection::val_str(String *str) {
+  assert(fixed);
+  String temp_str1;
+  String temp_str2;
+  String *swkb1 = args[0]->val_str(&temp_str1);
+  String *swkb2 = args[1]->val_str(&temp_str2);
+  if (args[0]->null_value || args[1]->null_value) {
+    return null_return_str();
+  }
+  if (!swkb1 || !swkb2) {
+    /*
+    We've already found out that args[0]->null_value and args[1]->null_value are
+    false. Therefore, this should never happen.
+    */
+    assert(false);
+    my_error(ER_GIS_INVALID_DATA, MYF(0), func_name());
+    return error_str();
+  }
+  std::unique_ptr<dd::cache::Dictionary_client::Auto_releaser> releaser(
+      new dd::cache::Dictionary_client::Auto_releaser(
+          current_thd->dd_client()));
+  const dd::Spatial_reference_system *srs1 = nullptr;
+  const dd::Spatial_reference_system *srs2 = nullptr;
+  std::unique_ptr<gis::Geometry> g1;
+  std::unique_ptr<gis::Geometry> g2;
+  if (gis::parse_geometry(current_thd, func_name(), swkb1, &srs1, &g1) ||
+      gis::parse_geometry(current_thd, func_name(), swkb2, &srs2, &g2)) {
+    assert(current_thd->is_error());
+    return error_str();
+  }
+  assert(g1);
+  assert(g2);
+  // The two geometry operand must be in the same coordinate system.
+  gis::srid_t srid1 = srs1 == nullptr ? 0 : srs1->id();
+  gis::srid_t srid2 = srs2 == nullptr ? 0 : srs2->id();
+  if (srid1 != srid2) {
+    my_error(ER_GIS_DIFFERENT_SRIDS, MYF(0), func_name(), srid1, srid2);
+    return error_str();
+  }
+  std::unique_ptr<gis::Geometry> result_g;
+  if (gis::intersection(srs1, g1.get(), g2.get(), func_name(), &result_g)) {
+    assert(current_thd->is_error());
+    return error_str();
+  }
+  if (result_g.get() == nullptr) {
+    // There should always be an output geometry for valid input.
+    my_error(ER_GIS_INVALID_DATA, MYF(0), func_name());
+    return error_str();
+  }
+  if (write_geometry(srs1, *result_g, str)) {
+    assert(current_thd->is_error());
+    return error_str();
+  }
+  return str;
 }
 
 String *Item_func_lineinterpolate::val_str(String *str) {
@@ -5895,6 +5929,71 @@ String *Item_func_lineinterpolate::val_str(String *str) {
   }
 
   write_geometry(srs, *target_g, str);
+  return str;
+}
+
+String *Item_func_st_symdifference::val_str(String *str) {
+  assert(fixed);
+  String temp_str1;
+  String temp_str2;
+  String *swkb1 = args[0]->val_str(&temp_str1);
+  String *swkb2 = args[1]->val_str(&temp_str2);
+
+  if (args[0]->null_value || args[1]->null_value) {
+    return null_return_str();
+  }
+
+  if (!swkb1 || !swkb2) {
+    /*
+    We've already found out that args[0]->null_value and args[1]->null_value are
+    false. Therefore, this should never happen.
+    */
+    assert(false);
+    my_error(ER_GIS_INVALID_DATA, MYF(0), func_name());
+    return error_str();
+  }
+
+  std::unique_ptr<dd::cache::Dictionary_client::Auto_releaser> releaser(
+      new dd::cache::Dictionary_client::Auto_releaser(
+          current_thd->dd_client()));
+  const dd::Spatial_reference_system *srs1 = nullptr;
+  const dd::Spatial_reference_system *srs2 = nullptr;
+  std::unique_ptr<gis::Geometry> g1;
+  std::unique_ptr<gis::Geometry> g2;
+  if (gis::parse_geometry(current_thd, func_name(), swkb1, &srs1, &g1) ||
+      gis::parse_geometry(current_thd, func_name(), swkb2, &srs2, &g2)) {
+    assert(current_thd->is_error());
+    return error_str();
+  }
+
+  assert(g1);
+  assert(g2);
+
+  // The two geometry operand must be in the same coordinate system.
+  gis::srid_t srid1 = srs1 == nullptr ? 0 : srs1->id();
+  gis::srid_t srid2 = srs2 == nullptr ? 0 : srs2->id();
+  if (srid1 != srid2) {
+    my_error(ER_GIS_DIFFERENT_SRIDS, MYF(0), func_name(), srid1, srid2);
+    return error_str();
+  }
+
+  std::unique_ptr<gis::Geometry> result_g;
+  if (gis::symdifference(srs1, g1.get(), g2.get(), func_name(), &result_g)) {
+    assert(current_thd->is_error());
+    return error_str();
+  }
+
+  if (result_g.get() == nullptr) {
+    // There should always be an output geometry for valid input.
+    my_error(ER_GIS_INVALID_DATA, MYF(0), func_name());
+    return error_str();
+  }
+
+  if (write_geometry(srs1, *result_g, str)) {
+    assert(current_thd->is_error());
+    return error_str();
+  }
+
   return str;
 }
 

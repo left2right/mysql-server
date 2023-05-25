@@ -9,7 +9,6 @@ var options = {
   innodb_cluster_name: mysqld.global.cluster_name,
   innodb_cluster_instances: mysqld.global.innodb_cluster_instances,
   gr_id: mysqld.global.gr_id,
-  group_replication_name: mysqld.global.gr_id,
   replication_group_members: gr_members,
 };
 
@@ -28,11 +27,12 @@ var common_responses = common_stmts.prepare_statement_responses(
       "router_select_members_count",
       "router_select_replication_group_name",
       "router_show_cipher_status",
-      "router_select_cluster_instances_v2",
+      "router_select_cluster_instances_v2_gr",
       "router_select_cluster_instance_addresses_v2",
       "router_start_transaction",
       "router_commit",
       "router_replication_group_members",
+      "router_clusterset_present",
     ],
     options);
 
@@ -44,6 +44,7 @@ var common_responses_regex = common_stmts.prepare_statement_responses_regex(
       "router_grant_on_routers",
       "router_grant_on_v2_routers",
       "router_update_routers_in_metadata",
+      "router_update_router_options_in_metadata",
     ],
     options);
 

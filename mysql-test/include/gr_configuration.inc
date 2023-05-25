@@ -16,6 +16,8 @@ if ($group_replication_group_name == "")
 # Save current connection.
 --let $_old_connection= $CURRENT_CONNECTION
 
+#check which stack are we using
+--let $have_xcom_stack= `SELECT @@group_replication_communication_stack LIKE 'XCOM'`
 
 # Default values
 --let $_group_replication_group_seeds=
@@ -50,7 +52,15 @@ while ($_rpl_server <= $_rpl_server_max)
 --let $_rpl_server= $_rpl_gcs_server_number
 while ($_rpl_server)
 {
-  --let $_rpl_gcs_server_port= \$SERVER_GR_PORT_$_rpl_server
+  --let $_rpl_gcs_server_port=
+  if ($have_xcom_stack)
+  {
+    --let $_rpl_gcs_server_port= \$SERVER_GR_PORT_$_rpl_server
+  }
+  if (!$have_xcom_stack)
+  {
+    --let $_rpl_gcs_server_port= \$SERVER_MYPORT_$_rpl_server
+  }
 
   # Append comma to list of addresses.
   if ($_group_replication_group_seeds != "")
@@ -86,7 +96,15 @@ while ($_rpl_server)
   }
 
   # Local address.
-  --let $_rpl_gcs_server_port= \$SERVER_GR_PORT_$_rpl_server
+  --let $_rpl_gcs_server_port=
+  if ($have_xcom_stack)
+  {
+    --let $_rpl_gcs_server_port= \$SERVER_GR_PORT_$_rpl_server
+  }
+  if (!$have_xcom_stack)
+  {
+    --let $_rpl_gcs_server_port= \$SERVER_MYPORT_$_rpl_server
+  }
   --let $_group_replication_local_address= $_rpl_gcs_server_address:$_rpl_gcs_server_port
 
   # Set configuration on server.
@@ -98,7 +116,7 @@ while ($_rpl_server)
 
   if (!$skip_recovery_configuration)
   {
-    --error 0, ER_SLAVE_CHANNEL_DOES_NOT_EXIST
+    --error 0, ER_REPLICA_CHANNEL_DOES_NOT_EXIST
     RESET REPLICA ALL FOR CHANNEL "group_replication_recovery";
     # Set distributed recovery user.
     --disable_warnings
@@ -106,7 +124,7 @@ while ($_rpl_server)
     --enable_warnings
   }
 
-  --error 0, ER_SLAVE_CHANNEL_DOES_NOT_EXIST
+  --error 0, ER_REPLICA_CHANNEL_DOES_NOT_EXIST
   RESET REPLICA ALL FOR CHANNEL "group_replication_applier";
 
   if ($rpl_privilege_checks_user == ''){

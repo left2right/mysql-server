@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -114,6 +114,13 @@ Dbtux::prepare_scan_ctx(Uint32 scanPtrI)
   FragPtr fragPtr;
   ScanOpPtr scanPtr;
   IndexPtr indexPtr;
+  if (unlikely(scanPtrI == RNIL))
+  {
+    jam();
+    /* Make sure context is cleared */
+    c_ctx.reset();
+    return;
+  }
   scanPtr.i = scanPtrI;
   ndbrequire(c_scanOpPool.getUncheckedPtrRW(scanPtr));
   prefetch_scan_record_3((Uint32*)scanPtr.p);
@@ -270,7 +277,7 @@ Dbtux::execACC_CHECK_SCAN(Signal* signal)
     {
       jamEntryDebug();
       release_c_free_scan_lock();
-      relinkScan(scan, frag, true, __LINE__);
+      relinkScan(scan, m_my_scan_instance, frag, true, __LINE__);
       /* WE ARE ENTERING A REAL-TIME BREAK FOR A SCAN HERE */
       return;
     }
@@ -298,7 +305,7 @@ Dbtux::execACC_SCANREQ(Signal* signal)
   do {
     // get the index
     IndexPtr indexPtr;
-    c_indexPool.getPtr(indexPtr, req->tableId);
+    ndbrequire(c_indexPool.getPtr(indexPtr, req->tableId));
     // get the fragment
     FragPtr fragPtr;
     findFrag(jamBuffer(), *indexPtr.p, req->fragmentNo, fragPtr);
@@ -336,6 +343,29 @@ Dbtux::execACC_SCANREQ(Signal* signal)
       /* Return ACC_SCANCONF */
       return;
     }
+    const bool isStatScan = AccScanReq::getStatScanFlag(req->requestInfo);
+    if (unlikely(isStatScan)) {
+      // Check if index stat can handle this index length
+      const Uint32 indexMaxKeyBytes =
+        indexPtr.p->m_keySpec.get_max_data_len(false);
+      if (indexMaxKeyBytes > (StatOp::MaxKeySize * 4)) {
+        // Unsupported key size. Returning an error could cause index creation
+        // to fail. Instead simply return ACC_SCANCONF treating it as an empty
+        // fragment
+        jam();
+        g_eventLogger->info("Index stat scan requested on index with "
+                            "unsupported key size");
+        scanPtr.p = nullptr;
+        c_ctx.scanPtr = scanPtr; // Ensure crash if we try to use pointer.
+        AccScanConf* const conf = (AccScanConf*)signal->getDataPtrSend();
+        conf->scanPtr = req->senderData;
+        conf->accPtr = RNIL;
+        conf->flag = AccScanConf::ZEMPTY_FRAGMENT;
+        signal->theData[8] = 0;
+        /* Return ACC_SCANCONF */
+        return;
+      }
+    }
     // seize from pool and link to per-fragment list
     if (ERROR_INSERTED(12008) ||
         ! c_scanOpPool.seize(scanPtr)) {
@@ -361,23 +391,15 @@ Dbtux::execACC_SCANREQ(Signal* signal)
     scanPtr.p->m_lockMode = AccScanReq::getLockMode(req->requestInfo);
     scanPtr.p->m_descending = AccScanReq::getDescendingFlag(req->requestInfo);
     c_ctx.scanPtr = scanPtr;
+
     /*
      * readCommitted lockMode keyInfo
      * 1 0 0 - read committed (no lock)
      * 0 0 0 - read latest (read lock)
      * 0 1 1 - read exclusive (write lock)
      */
-    const bool isStatScan = AccScanReq::getStatScanFlag(req->requestInfo);
     if (unlikely(isStatScan)) {
       jam();
-      // Check if index stat can handle this index length
-      Uint32 indexMaxKeyBytes = indexPtr.p->m_keySpec.get_max_data_len(false);
-      if (indexMaxKeyBytes > (StatOp::MaxKeySize * 4)) {
-        jam();
-        errorCode = AccScanRef::TuxInvalidKeySize;
-        break;
-      }
-
       if (!scanPtr.p->m_readCommitted) {
         jam();
         errorCode = AccScanRef::TuxInvalidLockMode;
@@ -645,7 +667,7 @@ Dbtux::execNEXT_SCANREQ(Signal* signal)
     break;
   case NextScanReq::ZSCAN_COMMIT:
     jamDebug();
-    // Fall through
+    [[fallthrough]];
   case NextScanReq::ZSCAN_NEXT_COMMIT:
     jamDebug();
     if (! scan.m_readCommitted)
@@ -680,7 +702,7 @@ Dbtux::execNEXT_SCANREQ(Signal* signal)
     {
       jam();
       scan.m_scanPos.m_loc = NullTupLoc;
-      relinkScan(scan, frag, true, __LINE__);
+      relinkScan(scan, m_my_scan_instance, frag, true, __LINE__);
       ndbassert(scan.m_scanLinkedPos == NullTupLoc);
     }
     if (unlikely(scan.m_lockwait))
@@ -750,7 +772,7 @@ Dbtux::continue_scan(Signal *signal,
      */
     release_c_free_scan_lock();
     jamLine(Uint16(scanPtr.i));
-    relinkScan(*scanPtr.p, frag, true, __LINE__);
+    relinkScan(*scanPtr.p, m_my_scan_instance, frag, true, __LINE__);
     NextScanConf* const conf = (NextScanConf*)signal->getDataPtrSend();
     conf->scanPtr = scan.m_userPtr;
     conf->accOperationPtr = RNIL;       // no tuple returned
@@ -879,7 +901,7 @@ Dbtux::continue_scan(Signal *signal,
           jamEntryDebug();
           /* Normal path */
           release_c_free_scan_lock();
-          relinkScan(scan, frag, true, __LINE__);
+          relinkScan(scan, m_my_scan_instance, frag, true, __LINE__);
           /* WE ARE ENTERING A REAL-TIME BREAK FOR A SCAN HERE */
           return; // stop for a while
         }
@@ -912,7 +934,7 @@ Dbtux::continue_scan(Signal *signal,
           jamEntryDebug();
           /* Normal path */
           release_c_free_scan_lock();
-          relinkScan(scan, frag, true, __LINE__);
+          relinkScan(scan, m_my_scan_instance, frag, true, __LINE__);
           /* WE ARE ENTERING A REAL-TIME BREAK FOR A SCAN HERE */
           return; // stop for a while
         }
@@ -937,7 +959,7 @@ Dbtux::continue_scan(Signal *signal,
           jamEntryDebug();
           /* Normal path */
           release_c_free_scan_lock();
-          relinkScan(scan, frag, true, __LINE__);
+          relinkScan(scan, m_my_scan_instance, frag, true, __LINE__);
           /* WE ARE ENTERING A REAL-TIME BREAK FOR A SCAN HERE */
           return; // stop for a while
         }
@@ -967,7 +989,7 @@ Dbtux::continue_scan(Signal *signal,
     c_lqh->execCHECK_LCP_STOP(signal);
     jamEntryDebug();
     ndbrequire(signal->theData[0] == CheckLcpStop::ZTAKE_A_BREAK);
-    relinkScan(scan, frag, true, __LINE__);
+    relinkScan(scan, m_my_scan_instance, frag, true, __LINE__);
     /* WE ARE ENTERING A REAL-TIME BREAK FOR A SCAN HERE */
     return;
   }
@@ -1525,8 +1547,56 @@ found_none:
   return ScanOp::Last;
 }
 
+bool
+Dbtux::checkScanInstance(Uint32 scanInstance)
+{
+  // General scanInstance handling rules :
+  //                  Instances handled :
+  //  - TUX block   : TUX or (QTUX iff Q threads)
+  //  - QTUX thread : (My QTUX id only iff Q threads)
+  const bool i_am_tux = ! m_is_query_block;
+  const bool scanInstance_is_tux =
+    (get_block_from_scan_instance(scanInstance) == DBTUX);
+
+  /* Basic sanity */
+  ndbrequire((i_am_tux && scanInstance_is_tux) ||
+             (globalData.ndbMtQueryThreads > 0));
+
+  if (i_am_tux)
+  {
+    /* TUX */
+    if (scanInstance_is_tux)
+    {
+      if (scanInstance != m_my_scan_instance)
+      {
+        /* TUX should not deal with some other TUX's scanInstances */
+        ndbrequire(false);
+      }
+      else
+      {
+        /* ok - TUX instance dealing with own scanInstance */
+      }
+    }
+    else
+    {
+      /* TUX instance dealing with QTUX scan - ok */
+    }
+  }
+  else
+  {
+    /**
+     * QTUX instance should only ever deal with its own scanInstances,
+     * not other QTUX's, or TUX's.
+     */
+    ndbrequire(scanInstance == m_my_scan_instance);
+  }
+  return true;
+}
+
+
 void
 Dbtux::relinkScan(ScanOp& scan,
+                  Uint32 scanInstance,
                   Frag& frag,
                   bool need_lock,
                   Uint32 line)
@@ -1555,6 +1625,7 @@ Dbtux::relinkScan(ScanOp& scan,
    * done by writers and these have already acquired exclusive access to
    * the index (and the whole table for that matter).
    */
+  ndbassert(checkScanInstance(scanInstance));
   if (scan.m_scanLinkedPos == scan.m_scanPos.m_loc)
   {
     jamDebug();
@@ -1588,13 +1659,13 @@ Dbtux::relinkScan(ScanOp& scan,
   if (scan.m_scanLinkedPos != NullTupLoc)
   {
     jamDebug();
-    unlinkScan(old_node, c_ctx.scanPtr, m_my_scan_instance);
+    unlinkScan(old_node, c_ctx.scanPtr, scanInstance);
   }
   if (scan.m_scanPos.m_loc != NullTupLoc)
   {
     jamDebug();
     scan.m_is_linked_scan = true;
-    linkScan(new_node, c_ctx.scanPtr, m_my_scan_instance);
+    linkScan(new_node, c_ctx.scanPtr, scanInstance);
   }
   else
   {

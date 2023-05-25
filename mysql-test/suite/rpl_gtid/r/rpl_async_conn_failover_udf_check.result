@@ -1,7 +1,7 @@
 include/master-slave.inc
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection master]
 #
 # 1. Check that the parameter count is greater than 3 and less then 5,
@@ -76,7 +76,7 @@ include/assert.inc ['There is one row in performance_schema.replication_asynchro
 CHANGE REPLICATION SOURCE TO SOURCE_HOST="127.0.0.1", SOURCE_USER="root", SOURCE_PASSWORD="", SOURCE_PORT=SERVER_1_PORT, NETWORK_NAMESPACE='red' FOR CHANNEL "";
 Warnings:
 Note	1759	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	1760	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	1760	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 include/assert.inc ['There is one row in performance_schema.replication_asynchronous_connection_failover']
 include/assert.inc ['There is one row in performance_schema.replication_asynchronous_connection_failover with NETWORK_NAMESPACE="red"']
 #
@@ -140,6 +140,8 @@ SELECT asynchronous_connection_failover_delete_source('', '127.0.0.1', 3100);
 ERROR 42000: Access denied; you need (at least one of) the SUPER or REPLICATION_SLAVE_ADMIN privilege(s) for this operation
 SELECT * FROM mysql.replication_asynchronous_connection_failover;
 ERROR 42000: SELECT command denied to user 'async_user'@'localhost' for table 'replication_asynchronous_connection_failover'
+SELECT asynchronous_connection_failover_reset();
+ERROR 42000: Access denied; you need (at least one of) the SUPER or REPLICATION_SLAVE_ADMIN privilege(s) for this operation
 #
 # 15. Verify user with REPLICATION_SLAVE_ADMIN privilege can execute
 #     asynchronous_connection_failover_add_source and
@@ -154,6 +156,9 @@ The UDF asynchronous_connection_failover_add_source() executed successfully.
 SELECT asynchronous_connection_failover_delete_source('', '127.0.0.1', 3100);
 asynchronous_connection_failover_delete_source('', '127.0.0.1', 3100)
 The UDF asynchronous_connection_failover_delete_source() executed successfully.
+SELECT asynchronous_connection_failover_reset();
+asynchronous_connection_failover_reset()
+The UDF asynchronous_connection_failover_reset() executed successfully.
 [connection master]
 DROP USER 'async_user';
 include/assert.inc ['There are 0 rows in performance_schema.replication_asynchronous_connection_failover']

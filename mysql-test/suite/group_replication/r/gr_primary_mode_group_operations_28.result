@@ -1,7 +1,7 @@
 include/group_replication.inc [rpl_server_count=3]
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection server1]
 
 # 1. Start single primary group and create table
@@ -63,6 +63,9 @@ include/gr_wait_primary_member_uuid.inc
 
 # 13. Clean up
 DROP TABLE t1;
+[connection server2]
+DROP TABLE t1;
+[connection server1]
 set session sql_log_bin=0;
 call mtr.add_suppression("Error while executing a group configuration operation: The appointed primary for election left the group, this operation will be aborted.*");
 set session sql_log_bin=1;

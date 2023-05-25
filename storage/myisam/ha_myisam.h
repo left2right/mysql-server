@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2000, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2000, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -105,8 +105,8 @@ class ha_myisam : public handler {
   }
   uint max_supported_keys() const override { return MI_MAX_KEY; }
   uint max_supported_key_length() const override { return MI_MAX_KEY_LENGTH; }
-  uint max_supported_key_part_length(
-      HA_CREATE_INFO *create_info MY_ATTRIBUTE((unused))) const override {
+  uint max_supported_key_part_length(HA_CREATE_INFO *create_info
+                                     [[maybe_unused]]) const override {
     return MI_MAX_KEY_LENGTH;
   }
   uint checksum() const override;

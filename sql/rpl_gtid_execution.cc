@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2011, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -302,16 +302,7 @@ int gtid_acquire_ownership_multiple(THD *thd) {
 }
 #endif
 
-/**
-  Check if current transaction should be skipped, that is, if GTID_NEXT
-  was already logged.
-
-  @param  thd    The calling thread.
-
-  @retval true   Transaction was already logged.
-  @retval false  Transaction must be executed.
-*/
-static inline bool is_already_logged_transaction(const THD *thd) {
+bool is_already_logged_transaction(const THD *thd) {
   DBUG_TRACE;
 
   const Gtid_specification *gtid_next = &thd->variables.gtid_next;
@@ -345,7 +336,7 @@ static inline bool is_already_logged_transaction(const THD *thd) {
 
   @param  thd     The calling thread.
 */
-static inline void skip_statement(const THD *thd MY_ATTRIBUTE((unused))) {
+static inline void skip_statement(THD *thd) {
   DBUG_TRACE;
 
   DBUG_PRINT("info", ("skipping statement '%s'. "
@@ -353,6 +344,12 @@ static inline void skip_statement(const THD *thd MY_ATTRIBUTE((unused))) {
                       "thd->thread_id=%u",
                       thd->query().str, thd->variables.gtid_next.type,
                       thd->lex->sql_command, thd->thread_id()));
+
+  /*
+    Despite the transaction was skipped, there is still the need
+    to notify that its session ticket was consumed.
+  */
+  Commit_stage_manager::get_instance().finish_session_ticket(thd);
 
 #ifndef NDEBUG
   const Gtid_set *executed_gtids = gtid_state->get_executed_gtids();
@@ -405,8 +402,8 @@ bool gtid_reacquire_ownership_if_anonymous(THD *thd) {
  */
 static bool is_stmt_taking_table_wr_locks(const THD *thd) {
   DBUG_TRACE;
-  TABLE_LIST *tables = thd->lex->query_tables;
-  for (TABLE_LIST *table = tables; table; table = table->next_global) {
+  Table_ref *tables = thd->lex->query_tables;
+  for (Table_ref *table = tables; table; table = table->next_global) {
     if (table->lock_descriptor().type >= TL_WRITE_ALLOW_WRITE) {
       return true;
     }
@@ -536,7 +533,7 @@ enum_gtid_statement_status gtid_pre_statement_checks(THD *thd) {
           skip_statement(thd);
           return GTID_STATEMENT_SKIP;
         }
-        /*FALLTHROUGH*/
+        [[fallthrough]];
       case ANONYMOUS_GTID:
         return GTID_STATEMENT_EXECUTE;
       case INVALID_GTID:
@@ -580,7 +577,7 @@ bool gtid_pre_statement_post_implicit_commit_checks(THD *thd) {
   return false;
 }
 
-void gtid_set_performance_schema_values(const THD *thd MY_ATTRIBUTE((unused))) {
+void gtid_set_performance_schema_values(const THD *thd [[maybe_unused]]) {
   DBUG_TRACE;
 #ifdef HAVE_PSI_TRANSACTION_INTERFACE
   if (thd->m_transaction_psi != nullptr) {

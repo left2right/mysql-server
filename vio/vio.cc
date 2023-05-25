@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2000, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -29,7 +29,7 @@
   Note that we can't have assertion on file descriptors;  The reason for
   this is that during mysql shutdown, another thread can close a file
   we are working on.  In this case we should just return read errors from
-  the file descriptior.
+  the file descriptor.
 */
 
 #include <sys/types.h>
@@ -85,16 +85,16 @@ void internal_vio_delete(Vio *vio);
   @retval 1       The requested I/O event has occurred.
 */
 
-static int no_io_wait(Vio *vio MY_ATTRIBUTE((unused)),
-                      enum enum_vio_io_event event MY_ATTRIBUTE((unused)),
-                      int timeout MY_ATTRIBUTE((unused))) {
+static int no_io_wait(Vio *vio [[maybe_unused]],
+                      enum enum_vio_io_event event [[maybe_unused]],
+                      int timeout [[maybe_unused]]) {
   return 1;
 }
 
 #endif
 
 extern "C" {
-static bool has_no_data(Vio *vio MY_ATTRIBUTE((unused))) { return false; }
+static bool has_no_data(Vio *vio [[maybe_unused]]) { return false; }
 }  // extern "C"
 
 Vio::Vio(uint flags) {
@@ -348,7 +348,7 @@ static bool vio_init(Vio *vio, enum enum_vio_type type, my_socket sd,
 */
 
 bool vio_reset(Vio *vio, enum enum_vio_type type, my_socket sd,
-               void *ssl MY_ATTRIBUTE((unused)), uint flags) {
+               void *ssl [[maybe_unused]], uint flags) {
   int ret = false;
   Vio new_vio(flags);
   DBUG_TRACE;
@@ -357,6 +357,12 @@ bool vio_reset(Vio *vio, enum enum_vio_type type, my_socket sd,
   assert(vio->type == VIO_TYPE_TCPIP || vio->type == VIO_TYPE_SOCKET);
 
   if (vio_init(&new_vio, type, sd, flags)) return true;
+
+#ifdef USE_PPOLL_IN_VIO
+  /* Preserve thread_id & signal_mask for this connection */
+  new_vio.thread_id = vio->thread_id;
+  new_vio.signal_mask = vio->signal_mask;
+#endif /* USE_PPOLL_IN_VIO */
 
   /* Preserve perfschema info for this connection */
   new_vio.mysql_socket.m_psi = vio->mysql_socket.m_psi;
@@ -549,7 +555,7 @@ void vio_delete(Vio *vio) { internal_vio_delete(vio); }
   components below it when application finish
 
 */
-void vio_end(void) { vio_ssl_end(); }
+void vio_end() { vio_ssl_end(); }
 
 struct vio_string {
   const char *m_str;
@@ -581,5 +587,4 @@ void get_vio_type_name(enum enum_vio_type vio_type, const char **str,
   }
   *str = vio_type_names[index].m_str;
   *len = vio_type_names[index].m_len;
-  return;
 }

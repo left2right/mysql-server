@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2014, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -212,7 +212,7 @@ uint Dictionary_impl::get_target_dd_version() { return dd::DD_VERSION; }
 uint Dictionary_impl::get_actual_dd_version(THD *thd) {
   bool exists = false;
   uint version = 0;
-  bool error MY_ATTRIBUTE((unused)) = tables::DD_properties::instance().get(
+  bool error [[maybe_unused]] = tables::DD_properties::instance().get(
       thd, "DD_VERSION", &version, &exists);
   assert(!error);
   assert(exists);
@@ -230,7 +230,7 @@ uint Dictionary_impl::get_target_I_S_version() {
 uint Dictionary_impl::get_actual_I_S_version(THD *thd) {
   bool exists = false;
   uint version = 0;
-  bool error MY_ATTRIBUTE((unused)) = tables::DD_properties::instance().get(
+  bool error [[maybe_unused]] = tables::DD_properties::instance().get(
       thd, "IS_VERSION", &version, &exists);
   assert(!error);
   assert(exists);
@@ -252,7 +252,7 @@ uint Dictionary_impl::get_target_P_S_version() { return PFS_DD_VERSION; }
 uint Dictionary_impl::get_actual_P_S_version(THD *thd) {
   bool exists = false;
   uint version = 0;
-  bool error MY_ATTRIBUTE((unused)) = tables::DD_properties::instance().get(
+  bool error [[maybe_unused]] = tables::DD_properties::instance().get(
       thd, "PS_VERSION", &version, &exists);
   assert(!error);
   assert(exists);

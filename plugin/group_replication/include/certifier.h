@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2014, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -107,8 +107,6 @@ class Gtid_set_ref : public Gtid_set {
   negatively certified. Otherwise, this transaction is marked
   certified and goes into applier.
 */
-typedef std::unordered_map<std::string, Gtid_set_ref *> Certification_info;
-
 class Certifier_broadcast_thread {
  public:
   /**
@@ -183,15 +181,23 @@ class Certifier_interface : public Certifier_stats {
       std::map<std::string, std::string> *cert_info) = 0;
   virtual int set_certification_info(
       std::map<std::string, std::string> *cert_info) = 0;
+  virtual int stable_set_handle() = 0;
   virtual bool set_group_stable_transactions_set(
       Gtid_set *executed_gtid_set) = 0;
   virtual void enable_conflict_detection() = 0;
   virtual void disable_conflict_detection() = 0;
   virtual bool is_conflict_detection_enable() = 0;
+  virtual ulonglong get_certification_info_size() override = 0;
 };
 
 class Certifier : public Certifier_interface {
  public:
+  typedef std::unordered_map<
+      std::string, Gtid_set_ref *, std::hash<std::string>,
+      std::equal_to<std::string>,
+      Malloc_allocator<std::pair<const std::string, Gtid_set_ref *>>>
+      Certification_info;
+
   Certifier();
   ~Certifier() override;
 
@@ -347,12 +353,11 @@ class Certifier : public Certifier_interface {
                     group_gtid executed GTID set. The sidno used for this
     transaction will be the group_sidno. The gno here belongs specifically to
     the group UUID.
-    @param[in] local If the gtid value is local or comes from a remote server
 
     @retval  1  error during addition.
     @retval  0  success.
   */
-  int add_group_gtid_to_group_gtid_executed(rpl_gno gno, bool local);
+  int add_group_gtid_to_group_gtid_executed(rpl_gno gno);
 
   /**
     Public method to add the given GTID value in the group_gtid_executed set
@@ -360,13 +365,21 @@ class Certifier : public Certifier_interface {
 
     @param[in] gle  The gtid value that needs to the added in the
                     group_gtid_executed GTID set.
-    @param[in] local If the gtid value is local or comes from a remote server
 
     @retval  1  error during addition.
     @retval  0  success.
   */
-  int add_specified_gtid_to_group_gtid_executed(Gtid_log_event *gle,
-                                                bool local);
+  int add_specified_gtid_to_group_gtid_executed(Gtid_log_event *gle);
+
+  /**
+    Computes intersection between all sets received, so that we
+    have the already applied transactions on all servers.
+
+    @return the operation status
+      @retval 0      OK
+      @retval !=0    Error
+  */
+  int stable_set_handle() override;
 
   /**
     This member function shall add transactions to the stable set
@@ -381,17 +394,6 @@ class Certifier : public Certifier_interface {
     @retval True   otherwise.
    */
   bool set_group_stable_transactions_set(Gtid_set *executed_gtid_set) override;
-
-  /**
-    Method to get a string that represents the last local certified GTID
-
-    @param[out] local_gtid_certified_string  The last local GTID transaction
-    string
-
-    @retval 0    if there is no GTID / the string is empty
-    @retval !=0  the size of the string
-  */
-  size_t get_local_certified_gtid(std::string &local_gtid_certified_string);
 
   /**
     Enables conflict detection.
@@ -497,10 +499,8 @@ class Certifier : public Certifier_interface {
 
     @param[in] gno  rpl_gno part of the executing gtid of the ongoing
                     transaction.
-    @param[in] local_transaction if the GTID belongs to a local transaction
   */
-  void add_to_group_gtid_executed_internal(rpl_sidno sidno, rpl_gno gno,
-                                           bool local_transaction);
+  void add_to_group_gtid_executed_internal(rpl_sidno sidno, rpl_gno gno);
 
   /**
     This method is used to get the next valid GNO for the given sidno,
@@ -675,11 +675,6 @@ class Certifier : public Certifier_interface {
   ulonglong gtids_assigned_in_blocks_counter;
 
   /**
-    Last local known GTID
-  */
-  Gtid last_local_gtid;
-
-  /**
     Conflict detection is performed when:
      1) group is on multi-master mode;
      2) group is on single-primary mode and primary is applying
@@ -719,16 +714,6 @@ class Certifier : public Certifier_interface {
                               Otherwise 0;
   */
   Gtid_set *get_certified_write_set_snapshot_version(const char *item);
-
-  /**
-    Computes intersection between all sets received, so that we
-    have the already applied transactions on all servers.
-
-    @return the operation status
-      @retval 0      OK
-      @retval !=0    Error
-  */
-  int stable_set_handle();
 
   /**
     Removes the intersection of the received transactions stable

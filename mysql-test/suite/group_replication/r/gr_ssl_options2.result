@@ -1,7 +1,7 @@
 include/group_replication.inc
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection server1]
 #
 # Setup the first member with a recovery user that requires SSL
@@ -34,13 +34,6 @@ include/assert.inc [On the recovered member, the table should exist and have 1 e
 #
 # Clean up
 #
-SET @@GLOBAL.group_replication_recovery_use_ssl= 0;
-SET @@GLOBAL.group_replication_recovery_ssl_ca= "";
-SET @@GLOBAL.group_replication_recovery_ssl_capath= "";
-SET @@GLOBAL.group_replication_recovery_ssl_cert= "";
-SET @@GLOBAL.group_replication_recovery_ssl_key= "";
-SET @@GLOBAL.group_replication_recovery_ssl_crl= "";
-SET @@GLOBAL.group_replication_recovery_ssl_crlpath= "";
 server1
 set session sql_log_bin=0;
 DROP USER 'rec_ssl_user';

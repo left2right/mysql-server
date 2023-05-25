@@ -24,7 +24,11 @@
 #
 # Commit order deadlock occurs only when MTS + LOGICAL CLOCK are enabled.
 --source include/only_mts_replica_parallel_type_logical_clock.inc
---source include/only_mts_replica_parallel_workers.inc
+# This test needs at least 2 MTA workers
+--let $option_name = replica_parallel_workers
+--let $option_operator = >
+--let $option_value = 1
+--source include/only_with_option.inc
 --source include/have_binlog_format_statement.inc
 --source include/have_debug.inc
 --source include/master-slave.inc
@@ -64,7 +68,7 @@ SET GLOBAL innodb_lock_wait_timeout = 300;
 --echo # 2.4 Add error suppressions.
 --echo #
 call mtr.add_suppression("Worker .* failed executing transaction");
-call mtr.add_suppression("The slave coordinator and worker threads are stopped");
+call mtr.add_suppression("The replica coordinator and worker threads are stopped");
 
 --echo #
 --echo # 2.5 An extra connection needed on Slave.
@@ -160,7 +164,7 @@ COMMIT;
 --echo #      to fail with 'ER_DUP_ENTRY' error (after the worker2
 --echo #      detected the 'commit order deadlock').
 --echo #
---let $slave_sql_errno=1062,3030 # ER_DUP_ENTRY, ER_SLAVE_WORKER_STOPPED_PREVIOUS_THD_ERROR
+--let $slave_sql_errno=1062,3030 # ER_DUP_ENTRY, ER_REPLICA_WORKER_STOPPED_PREVIOUS_THD_ERROR
 --source include/wait_for_slave_sql_error.inc
 
 --echo #

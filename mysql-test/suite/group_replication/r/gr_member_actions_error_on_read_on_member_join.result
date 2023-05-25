@@ -1,16 +1,18 @@
 include/group_replication.inc
 Warnings:
 Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
-Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
 [connection server1]
 [connection server1]
 SET SESSION sql_log_bin = 0;
 call mtr.add_suppression("Unable to read the member actions configuration during group membership change. Please check the tables 'mysql.replication_group_member_actions' and 'mysql.replication_group_configuration_version'.");
+call mtr.add_suppression("Unable to read the replication failover channels configuration during group membership change. Please check the tables .*");
 SET SESSION sql_log_bin = 1;
 [connection server2]
 SET SESSION sql_log_bin = 0;
 call mtr.add_suppression("Unable to parse the member actions configuration sent by the group on member join.");
 call mtr.add_suppression("The group members were unable to send their member actions configuration. Please check the tables 'mysql.replication_group_member_actions' and 'mysql.replication_group_configuration_version' on all members.");
+call mtr.add_suppression("Unable to parse the replication failover channels configuration sent by the group on member join.");
 SET SESSION sql_log_bin = 1;
 
 ############################################################

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2014, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -76,8 +76,8 @@ class Object_table {
     The new instance has the predefined options that all DD tables share:
 
       ENGINE=INNODB
-      DEFAULT CHARSET=utf8
-      COLLATE=utf8_bin
+      DEFAULT CHARSET=utf8mb3
+      COLLATE=utf8mb3_bin
       ROW_FORMAT=DYNAMIC
       STATS_PERSISTENT=0
       TABLESPACE=mysql
@@ -176,11 +176,7 @@ class Object_table {
   virtual void set_hidden(bool hidden) = 0;
 
  public:
-#ifdef __SUNPRO_CC
-  virtual ~Object_table() {}
-#else
   virtual ~Object_table() = default;
-#endif
 };
 
 ///////////////////////////////////////////////////////////////////////////

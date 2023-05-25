@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -22,9 +22,8 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 */
 
-
-#include <ndb_global.h>
-#include <NdbTCP.h>
+#include "ndb_global.h"
+#include "portlib/NdbTCP.h"
 
 #include <string.h>
 
@@ -138,7 +137,7 @@ Ndb_getInAddr6(struct in6_addr * dst, const char *address)
 
   struct addrinfo* ai_list;
 
-  if (getaddrinfo(address, NULL, &hints, &ai_list) != 0)
+  if (getaddrinfo(address, nullptr, &hints, &ai_list) != 0)
   {
     return -1;
   }
@@ -160,7 +159,7 @@ Ndb_inet_ntop(int af,
 {
   // Function assume there is at least some space in "dst" since there
   // are no way to return failure without writing into "dst". Check
-  // that noone seem to call function with too small "dst_size"
+  // that no one seem to call function with too small "dst_size"
   assert(dst);
   assert(dst_size > 0);
 
@@ -177,7 +176,7 @@ Ndb_inet_ntop(int af,
                         sizeof(sockaddr_in),
                         dst,
                         (socklen_t)dst_size,
-                        NULL,
+                        nullptr,
                         0,
                         NI_NUMERICHOST);
       if (ret != 0)
@@ -196,7 +195,7 @@ Ndb_inet_ntop(int af,
                         sizeof(sockaddr_in6),
                         dst,
                         (socklen_t)dst_size,
-                        NULL,
+                        nullptr,
                         0,
                         NI_NUMERICHOST);
       const char* mapped_prefix = "::ffff:";
@@ -231,6 +230,8 @@ Ndb_inet_ntop(int af,
 /**
  * This function takes a string splits it into the address/hostname part
  * and port/service part.
+ * If string contains space, it is expected that the part preceding space is
+ * host address or name and the succeeding part is service port.
  * It does not do deep verification that passed string makes sense.
  * It is quite optimistic only checking for []: (ipv6-address) and
  * single : (ipv4-address or hostname).
@@ -246,8 +247,35 @@ Ndb_inet_ntop(int af,
  */
 int
 Ndb_split_string_address_port(const char *arg, char *host, size_t hostlen,
-                         char *serv, size_t servlen)
+                              char *serv, size_t servlen)
 {
+  const char* sep = strchr(arg, ' ');
+  if (sep != nullptr)
+  {
+    size_t hlen = sep - arg;
+    char unchecked_host[NDB_ADDR_STRLEN];
+    if (hlen >= sizeof(unchecked_host))
+    {
+      return -1;
+    }
+    memcpy(unchecked_host, arg, hlen);
+    unchecked_host[hlen] = 0;
+    while (*sep == ' ') sep++;
+    serv[servlen - 1] = 0;
+    strncpy(serv, sep, servlen);
+    if (serv[servlen - 1] != 0)
+    {
+      return -1;
+    }
+    char dummy[1];
+    /*
+     * Parse host part on its own. Will handle bracketed IPv6 address
+     * ([1::2:3]), and also fail if host part contains its own port
+     * ("1.2.3.4:5 4444").
+     */
+    return Ndb_split_string_address_port(unchecked_host, host, hostlen, dummy, 1);
+  }
+
   const char *port_colon = nullptr;
 
   if (*arg == '[')
@@ -263,7 +291,8 @@ Ndb_split_string_address_port(const char *arg, char *host, size_t hostlen,
     if ((*port_colon == ':') || (*port_colon == '\0'))
     {
       size_t copy_bytes = port_colon - arg - 2;
-      if ((copy_bytes >= hostlen) || (strlen(port_colon + 1) >= servlen))
+      if ((copy_bytes >= hostlen) ||
+          (*port_colon != '\0' && strlen(port_colon + 1) >= servlen))
         return -1; // fail on truncate
 
       // Check if host has at least one colon
@@ -275,7 +304,10 @@ Ndb_split_string_address_port(const char *arg, char *host, size_t hostlen,
       host[copy_bytes] = '\0';
       if (*port_colon == ':')
       {
+        serv[servlen - 1] = '\0';
         strncpy(serv, port_colon + 1, servlen);
+        if (serv[servlen - 1] != '\0')
+          return -1;
       }
       else
       {
@@ -294,14 +326,19 @@ Ndb_split_string_address_port(const char *arg, char *host, size_t hostlen,
       return -1; // fail on truncate
     strncpy(host, arg, copy_bytes);
     host[port_colon - arg] = '\0';
-    strncpy(serv, port_colon + 1, servlen);
     serv[servlen - 1] = '\0';
+    strncpy(serv, port_colon + 1, servlen);
+    if (serv[servlen - 1] != '\0')
+      return -1;
     return 0;
   }
+  // more than one colon or no colon - assume no port !
   if (strlen(arg) >= hostlen)
     return -1; // fail on truncate
-  strncpy(host, arg, hostlen);
   host[hostlen - 1] = '\0';
+  strncpy(host, arg, hostlen);
+  if (host[hostlen - 1] != '\0')
+    return -1;
   serv[0] = '\0';
   return 0;
 }
@@ -358,6 +395,36 @@ CHECK(const char* name, int chk_result, const char* chk_address = nullptr)
   }
 }
 
+static void
+CHECK_SPLIT(const char str[], int chk_result, const char* host = nullptr,
+            const char* serv = nullptr)
+{
+  char host_buf[NDB_DNS_HOST_NAME_LENGTH + 1];
+  char serv_buf[NDB_IANA_SERVICE_NAME_LENGTH + 1];
+  int res = Ndb_split_string_address_port(str, host_buf, sizeof(host_buf),
+                                          serv_buf, sizeof(serv_buf));
+  if (res != chk_result)
+  {
+    fprintf(stderr, "> unexpected result: str '%s' %d, expected: %d\n", str,
+            res, chk_result);
+    abort();
+  }
+  if (res != 0)
+    return;
+  if (host != nullptr && strcmp(host_buf, host) != 0)
+  {
+    fprintf(stderr, "> unexpected result: str '%s' host '%s', expected '%s'\n",
+            str, host_buf, host);
+    abort();
+  }
+  if (serv != nullptr && strcmp(serv_buf, serv) != 0)
+  {
+    fprintf(stderr,
+            "> unexpected result: str '%s' service '%s', expected '%s'\n",
+            str, serv_buf, serv);
+    abort();
+  }
+}
 
 /*
   socket_library_init
@@ -407,7 +474,7 @@ can_resolve_hostname(const char* name)
   hints.ai_protocol = IPPROTO_TCP;
 
   struct addrinfo* ai_list;
-  int err = getaddrinfo(name, NULL, &hints, &ai_list);
+  int err = getaddrinfo(name, nullptr, &hints, &ai_list);
   freeaddrinfo(ai_list);
 
   if (err)
@@ -443,7 +510,7 @@ TAPTEST(NdbGetInAddr)
   }
   CHECK("127.0.0.1", 0);
 
-  char hostname_buf[256];
+  char hostname_buf[NDB_DNS_HOST_NAME_LENGTH + 1];
   char addr_buf[NDB_ADDR_STRLEN];
   if (gethostname(hostname_buf, sizeof(hostname_buf)) == 0 &&
       can_resolve_hostname(hostname_buf))
@@ -467,7 +534,7 @@ TAPTEST(NdbGetInAddr)
   CHECK("::1", 0);
 
   // 255 byte hostname which does not exist
-  char long_hostname[256];
+  char long_hostname[NDB_DNS_HOST_NAME_LENGTH + 1];
   memset(long_hostname, 'y', sizeof(long_hostname)-1);
   long_hostname[sizeof(long_hostname)-1] = 0;
   assert(strlen(long_hostname) == 255);
@@ -486,76 +553,55 @@ TAPTEST(NdbGetInAddr)
     fprintf(stderr, "> AF_UNSPEC -> '%s'\n", addr_str);
   }
 
+  CHECK_SPLIT("1.2.3.4", 0, "1.2.3.4", "");
+  CHECK_SPLIT("001.009.081.0255", 0, "001.009.081.0255", "");
+  CHECK_SPLIT("1.2.3.4:5", 0, "1.2.3.4", "5");
+  CHECK_SPLIT("1::5:4", 0, "1::5:4", "");
+  CHECK_SPLIT("[1::5]:4", 0, "1::5", "4");
+  CHECK_SPLIT("my_host:4", 0, "my_host", "4");
+  CHECK_SPLIT("localhost:13001", 0, "localhost", "13001");
+  CHECK_SPLIT("[fed0:10::182]", 0, "fed0:10::182", "");
+  CHECK_SPLIT("fed0:10::182", 0, "fed0:10::182", "");
+  CHECK_SPLIT("[fed0:10:0:ff:11:22:33:182]:1186", 0,
+              "fed0:10:0:ff:11:22:33:182", "1186");
+  CHECK_SPLIT("::", 0, "::", "");
+  CHECK_SPLIT("::1", 0, "::1", "");
+  CHECK_SPLIT("2001:db8::1", 0, "2001:db8::1", "");
+  CHECK_SPLIT("192.0.2.0:1", 0, "192.0.2.0", "1");
+  /*
+   * When using space separated host and port, host part should not contain
+   * port.
+   */
+  CHECK_SPLIT("192.0.2.0:1 4444", -1);
+
+  char long_host[NDB_DNS_HOST_NAME_LENGTH + 3 + 1];
+  for (int i = 0; i < NDB_DNS_HOST_NAME_LENGTH + 3; i++)
+    long_host[i] = ((i + 1) % 27) ? 'a' + (i % 27) : '.';
+  long_host[NDB_DNS_HOST_NAME_LENGTH + 3] = 0;
+  CHECK_SPLIT(long_host, -1);
+  long_host[1] = ':';
+  CHECK_SPLIT(long_host, -1);
+  long_host[1] = 'b';
+  long_host[NDB_DNS_HOST_NAME_LENGTH] = ':';
+  CHECK_SPLIT(long_host, 0, nullptr, &long_host[NDB_DNS_HOST_NAME_LENGTH + 1]);
+
+  /*
+   * Ndb_split_string_address_port will allow the below for now since it only
+   * does not do a full validation of host.
+   */
+  CHECK_SPLIT("192.0.2.0::1", 0, "192.0.2.0::1", "");
+  CHECK_SPLIT("fed0:10:0:ff:11:22:33:182:1186", 0,
+              "fed0:10:0:ff:11:22:33:182:1186", "");
+
+  CHECK_SPLIT("localhost 13001", 0, "localhost", "13001");
+  CHECK_SPLIT("fed0:10:0:ff:11:22:33:182 1186", 0, "fed0:10:0:ff:11:22:33:182",
+              "1186");
+  CHECK_SPLIT("super:1186 1234", -1);
+  CHECK_SPLIT("[2001:db8::1] 20", 0, "2001:db8::1", "20");
+
   socket_library_end();
 
   return 1; // OK
 }
-#endif
 
-#ifndef HAVE_POLL
-static inline
-int ndb_socket_nfds(ndb_socket_t s, int nfds)
-{
-#ifdef _WIN32
-  (void)s;
-#else
-  if(s.fd > nfds)
-    return s.fd;
-#endif
-  return nfds;
-}
-#endif
-
-#define my_FD_SET(sock,set)   FD_SET(ndb_socket_get_native(sock), set)
-#define my_FD_ISSET(sock,set) FD_ISSET(ndb_socket_get_native(sock), set)
-
-
-int Ndb_check_socket_hup(NDB_SOCKET_TYPE sock)
-{
-#ifdef HAVE_POLL
-  struct pollfd pfd[1];
-  int r;
-
-  pfd[0].fd= sock.fd; // FIXME: THIS IS A BUG
-  pfd[0].events= POLLHUP | POLLIN | POLLOUT | POLLNVAL;
-  pfd[0].revents= 0;
-  r= poll(pfd,1,0);
-  if(pfd[0].revents & (POLLHUP|POLLERR))
-    return 1;
-
-  return 0;
-#else /* HAVE_POLL */
-  fd_set readfds, writefds, errorfds;
-  struct timeval tv= {0,0};
-  int s_err;
-  ndb_socket_len_t s_err_size= sizeof(s_err);
-
-  FD_ZERO(&readfds);
-  FD_ZERO(&writefds);
-  FD_ZERO(&errorfds);
-
-  my_FD_SET(sock, &readfds);
-  my_FD_SET(sock, &writefds);
-  my_FD_SET(sock, &errorfds);
-
-  if(select(ndb_socket_nfds(sock,0)+1,
-            &readfds, &writefds, &errorfds, &tv)<0)
-  {
-    return 1;
-  }
-
-  if(my_FD_ISSET(sock,&errorfds))
-    return 1;
-
-  s_err=0;
-  if (ndb_getsockopt(sock, SOL_SOCKET, SO_ERROR, &s_err, &s_err_size) != 0)
-    return(1);
-
-  if (s_err)
-  {                                             /* getsockopt could succeed */
-    return(1);                                 /* but return an error... */
-  }
-
-  return 0;
-#endif /* HAVE_POLL */
-}
+#endif /* TEST_NDBGETINADDR */

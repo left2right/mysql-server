@@ -3,19 +3,20 @@
 --source include/not_group_replication_plugin.inc
 --source include/have_debug.inc
 --source include/have_debug_sync.inc
-# TODO: The test can be converted to run with Logical-clock.
---source include/have_replica_parallel_type_database.inc
+--source include/only_mts_replica_parallel_workers.inc
+--source include/only_mts_replica_parallel_type_logical_clock.inc
+--source include/only_replica_preserve_commit_order.inc
 --source include/master-slave.inc
 
-CALL mtr.add_suppression(".*slave coordinator and worker threads are stopped.*");
+CALL mtr.add_suppression(".*replica coordinator and worker threads are stopped.*");
 CALL mtr.add_suppression("Could not execute Write_rows event on table test.*");
 CALL mtr.add_suppression("Worker .* failed executing transaction");
-CALL mtr.add_suppression("Slave worker has stopped since one or more of the
+CALL mtr.add_suppression("Replica worker has stopped since one or more of the
   previous worker(s) have encountered an error and replica-preserve-commit-order
   is enabled.*");
 
 SET @save_debug = @@GLOBAL.debug;
-SET GLOBAL debug = "d,set_commit_parent_100";
+SET GLOBAL debug = "+d,set_commit_parent_100";
 
 CREATE TABLE t_w1 (c1 int PRIMARY KEY) ENGINE = InnoDB;
 CREATE TABLE t_w2 (c1 int PRIMARY KEY) ENGINE = InnoDB;
@@ -57,11 +58,12 @@ SET GLOBAL debug = @save_debug;
 
 # Wait until all workers are blocked by LOCK TABLE t1 WRITE. It implies all
 # transactions are registered into the order commit queue.
-let $wait_condition= SELECT count(*) = 4 FROM INFORMATION_SCHEMA.PROCESSLIST WHERE State = 'Waiting for table metadata lock';
+--let $number_workers =`SELECT @@GLOBAL.replica_parallel_workers`
+let $wait_condition= SELECT count(*) = $number_workers FROM INFORMATION_SCHEMA.PROCESSLIST WHERE State = 'Waiting for table metadata lock';
 --source include/wait_condition.inc
 
 UNLOCK TABLES;
---let $slave_sql_errno=1062,3030 # ER_DUP_ENTRY, ER_SLAVE_WORKER_STOPPED_PREVIOUS_THD_ERROR
+--let $slave_sql_errno=1062,3030 # ER_DUP_ENTRY, ER_REPLICA_WORKER_STOPPED_PREVIOUS_THD_ERROR
 --source include/wait_for_slave_sql_error.inc
 
 --let $assert_text='Rows have been inserted to table t_w1'

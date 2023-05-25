@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -25,14 +25,21 @@
 #ifndef NDB_TCP_H
 #define NDB_TCP_H
 
-#include <ndb_global.h>
-#include <ndb_net.h>
-#include "ndb_socket.h"
-#include <portlib/ndb_socket_poller.h>
-
-typedef ndb_socket_t NDB_SOCKET_TYPE;
+#include "ndb_global.h"
+#include "portlib/ndb_socket.h"
 
 #define NDB_ADDR_STRLEN 512
+
+/*
+ * Host name length from 1035 DOMAIN NAMES - IMPLEMENTATION AND SPECIFICATION.
+ */
+#define NDB_DNS_HOST_NAME_LENGTH 255
+/*
+ * Service name length from RFC 6335 Internet Assigned Numbers Authority (IANA)
+ * Procedures for the Management of the Service Name and Transport Protocol
+ * Port Number Registry
+ */
+#define NDB_IANA_SERVICE_NAME_LENGTH 15
 
 /* Set user's preference for IPv4 or IPv6 when resolving names.
    The preference is stored and used for subsequent lookups.
@@ -54,7 +61,6 @@ char* Ndb_inet_ntop(int af,
                     char *dst,
                     size_t dst_size);
 
-int Ndb_check_socket_hup(NDB_SOCKET_TYPE sock);
 int Ndb_split_string_address_port(const char *arg,
                                char *host,
                                size_t hostlen,

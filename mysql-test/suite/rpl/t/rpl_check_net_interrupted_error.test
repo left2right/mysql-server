@@ -27,8 +27,7 @@
 --source include/have_binlog_format_mixed.inc
 
 --source include/rpl_connection_slave.inc
-call mtr.add_suppression("Slave I/O .*: Master command COM_REGISTER_SLAVE failed: .*");
-SET @debug_saved=@@global.debug;
+call mtr.add_suppression("Replica I/O .*: Source command COM_REGISTER_REPLICA failed: .*");
 --source include/stop_slave.inc
 
 --source include/rpl_connection_master.inc
@@ -39,7 +38,9 @@ DROP TABLE t1;
 --echo #
 --echo # Active injected error during getting server id from master
 --echo #
-SET GLOBAL DEBUG='d,get_source_server_id.ER_NET_READ_INTERRUPTED';
+
+--let $debug_point= get_source_server_id.ER_NET_READ_INTERRUPTED
+--source include/add_debug_point.inc
 
 START SLAVE;
 # Crash if error happens during getting server id from master
@@ -55,13 +56,14 @@ START SLAVE;
 --source include/assert_grep.inc
 
 --let $assert_count= 1
---let $assert_select= Get master SERVER_ID failed with error
+--let $assert_select= Get source SERVER_ID failed with error
 --let $assert_text= Make sure there is the warning "Get master SERVER_ID failed with error" in slave's error log.
 --source include/assert_grep.inc
 
 --source include/stop_slave.inc
 
-SET GLOBAL DEBUG= @save_debug;
+--let $debug_point= get_source_server_id.ER_NET_READ_INTERRUPTED
+--source include/remove_debug_point.inc
 
 # Cleanup
 --source include/start_slave.inc

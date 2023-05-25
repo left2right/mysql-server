@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2021, Oracle and/or its affiliates.
+Copyright (c) 1996, 2023, Oracle and/or its affiliates.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -44,8 +44,6 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include <set>
 #include <vector>
 
-//#include <unordered_set>
-
 /** printf(3) format used for printing DB_TRX_ID and other system fields */
 #define TRX_ID_FMT IB_ID_FMT
 
@@ -53,20 +51,20 @@ this program; if not, write to the Free Software Foundation, Inc.,
 static const space_id_t TRX_SYS_SPACE = 0;
 
 /** Page number of the transaction system page */
-#define TRX_SYS_PAGE_NO FSP_TRX_SYS_PAGE_NO
+constexpr uint32_t TRX_SYS_PAGE_NO = FSP_TRX_SYS_PAGE_NO;
 
 /** Random value to check for corruption of trx_t */
 static const ulint TRX_MAGIC_N = 91118598;
 
 /** If this flag is set then the transaction cannot be rolled back
 asynchronously. */
-static const ib_uint32_t TRX_FORCE_ROLLBACK_DISABLE = 1 << 29;
+static const uint32_t TRX_FORCE_ROLLBACK_DISABLE = 1 << 29;
 
 /** Mark the transaction for forced rollback */
-static const ib_uint32_t TRX_FORCE_ROLLBACK = 1 << 31;
+static const uint32_t TRX_FORCE_ROLLBACK = 1U << 31;
 
 /** For masking out the above four flags */
-static const ib_uint32_t TRX_FORCE_ROLLBACK_MASK = 0x1FFFFFFF;
+static const uint32_t TRX_FORCE_ROLLBACK_MASK = 0x1FFFFFFF;
 
 /** Transaction execution states when trx->state == TRX_STATE_ACTIVE */
 enum trx_que_t {
@@ -288,7 +286,7 @@ inline std::ostream &operator<<(std::ostream &out, const trx_rseg_t &rseg) {
   return (rseg.print(out));
 }
 
-using Rsegs_Vector = std::vector<trx_rseg_t *, ut_allocator<trx_rseg_t *>>;
+using Rsegs_Vector = std::vector<trx_rseg_t *, ut::allocator<trx_rseg_t *>>;
 using Rseg_Iterator = Rsegs_Vector::iterator;
 
 /** This is a wrapper for a std::vector of trx_rseg_t object pointers. */
@@ -318,7 +316,7 @@ class Rsegs {
   void clear();
 
   /** Add rollback segment.
-  @param[in]	rseg	rollback segment to add. */
+  @param[in]    rseg    rollback segment to add. */
   void push_back(trx_rseg_t *rseg) { m_rsegs.push_back(rseg); }
 
   /** Number of registered rsegs.
@@ -334,12 +332,12 @@ class Rsegs {
   Rseg_Iterator end() { return (m_rsegs.end()); }
 
   /** Find the rseg at the given slot in this vector.
-  @param[in]	slot	a slot within the vector.
+  @param[in]    slot    a slot within the vector.
   @return an iterator to the end */
   trx_rseg_t *at(ulint slot) { return (m_rsegs.at(slot)); }
 
   /** Find an rseg in the std::vector that uses the rseg_id given.
-  @param[in]	rseg_id		A slot in a durable array such as
+  @param[in]    rseg_id         A slot in a durable array such as
                                   the TRX_SYS page or RSEG_ARRAY page.
   @return a pointer to an trx_rseg_t that uses the rseg_id. */
   trx_rseg_t *find(ulint rseg_id);
@@ -356,13 +354,13 @@ class Rsegs {
   }
 
   /** Acquire the shared lock on m_rsegs. */
-  void s_lock() { rw_lock_s_lock(m_latch); }
+  void s_lock() { rw_lock_s_lock(m_latch, UT_LOCATION_HERE); }
 
   /** Release the shared lock on m_rsegs. */
   void s_unlock() { rw_lock_s_unlock(m_latch); }
 
   /** Acquire the exclusive lock on m_rsegs. */
-  void x_lock() { rw_lock_x_lock(m_latch); }
+  void x_lock() { rw_lock_x_lock(m_latch, UT_LOCATION_HERE); }
 
   /** Release the exclusive lock on m_rsegs. */
   void x_unlock() { rw_lock_x_unlock(m_latch); }
@@ -434,12 +432,12 @@ class Rsegs {
   ACTIVE:   The rollback segments in this tablespace can be allocated to new
             transactions.  The undo tablespace is ready for undo logs.
   INACTIVE_IMPLICIT: These rollback segments are no longer being used by new
-            transactions.  They arre 'inactive'. The truncate process
+            transactions.  They are 'inactive'. The truncate process
             is happening. This undo tablespace was selected by the
             purge thread implicitly. When the truncation process
             is complete, the next state is ACTIVE.
   INACTIVE_EXPLICIT:  These rollback segments are no longer being used by new
-            transactions.  They arre 'inactive'. The truncate process
+            transactions.  They are 'inactive'. The truncate process
             is happening. This undo tablespace was selected by the
             an ALTER UNDO TABLESPACE  SET INACTIVE command. When the
             truncation process is complete, the next state is EMPTY.
@@ -458,7 +456,7 @@ class Rsegs {
   SetInactive:  This ALTER UNDO TABLESPACE causes an explicit truncation.
   SetActive:    This ALTER UNDO TABLESPACE changes the target state from
                 EMPTY to ACTIVE.
-  Trucate:      The truncate process is completed by the purge thread.
+  Truncate:     The truncate process is completed by the purge thread.
   Drop:         Delete an EMPTY undo tablespace
   Crash:        A crash occurs
   Fixup:        At startup, if an undo space was being truncated with a crash.
@@ -513,7 +511,7 @@ class Rsegs {
 template <size_t N>
 using Rsegs_array = std::array<trx_rseg_t *, N>;
 
-/** Rollback segements from a given transaction with trx-no
+/** Rollback segments from a given transaction with trx-no
 scheduled for purge. */
 class TrxUndoRsegs {
  public:
@@ -590,48 +588,18 @@ class TrxUndoRsegs {
 };
 
 typedef std::priority_queue<
-    TrxUndoRsegs, std::vector<TrxUndoRsegs, ut_allocator<TrxUndoRsegs>>,
+    TrxUndoRsegs, std::vector<TrxUndoRsegs, ut::allocator<TrxUndoRsegs>>,
     TrxUndoRsegs>
     purge_pq_t;
 
-typedef std::vector<trx_id_t, ut_allocator<trx_id_t>> trx_ids_t;
-
-/** Mapping read-write transactions from id to transaction instance, for
-creating read views and during trx id lookup for MVCC and locking. */
-struct TrxTrack {
-  explicit TrxTrack(trx_id_t id, trx_t *trx = nullptr) : m_id(id), m_trx(trx) {
-    // Do nothing
-  }
-
-  trx_id_t m_id;
-  trx_t *m_trx;
-};
-
-/** Number of shards created for transactions. */
-constexpr size_t TRX_SHARDS_N = 256;
-
-struct TrxTrackHash {
-  size_t operator()(const TrxTrack &key) const {
-    return static_cast<size_t>(key.m_id / TRX_SHARDS_N);
-  }
-};
-
-/**
-Comparator for TrxMap */
-struct TrxTrackHashCmp {
-  bool operator()(const TrxTrack &lhs, const TrxTrack &rhs) const {
-    return (lhs.m_id == rhs.m_id);
-  }
-};
-
-typedef std::unordered_set<TrxTrack, TrxTrackHash, TrxTrackHashCmp> TrxIdSet;
+typedef std::vector<trx_id_t, ut::allocator<trx_id_t>> trx_ids_t;
 
 struct TrxVersion {
   TrxVersion(trx_t *trx);
 
   trx_t *m_trx;
-  ulint m_version;
+  uint64_t m_version;
 };
 
-typedef std::vector<TrxVersion, ut_allocator<TrxVersion>> hit_list_t;
+typedef std::vector<TrxVersion, ut::allocator<TrxVersion>> hit_list_t;
 #endif /* trx0types_h */

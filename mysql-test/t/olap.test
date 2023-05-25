@@ -881,6 +881,7 @@ ORDER BY i,j;
 
 #Bug#31073133 - The plan below should not have sorting on "i" before rollup
 #is processed.
+--skip_if_hypergraph  # Has fewer temporary tables in the plan.
 EXPLAIN FORMAT=tree SELECT i, j, i+j, AVG(j) over () from t1 GROUP BY i,j
 WITH ROLLUP HAVING i+j is NULL ORDER BY i;
 SELECT i, j, i+j, AVG(j) over () from t1 GROUP BY i,j WITH ROLLUP
@@ -1048,6 +1049,10 @@ DROP TABLE t1;
 CREATE TABLE t(a INT,b BLOB);
 INSERT INTO t VALUES (1,'a'),(1,'b'),(2,'c'),(3,'d');
 
+# This query is pretty nonsensical, and the query output itself doesn't matter much;
+# we just don't want it to crash. The result will depend on the point of which
+# we evaluate the variable assignments, so it's not stable with respect to the query plan.
+--replace_regex /^NULL$/1/
 SELECT (((@e:=`b`)) NOT BETWEEN 0x0b5f09 AND (CHAR(md5(@pub1),
   (CONNECTION_ID()+LEAD(5225.750000,110) RESPECT NULLS OVER(ORDER BY b, a)))))
   FROM t GROUP BY b,a WITH ROLLUP;
@@ -1171,3 +1176,102 @@ CREATE TABLE t1 ( i INTEGER NOT NULL PRIMARY KEY );
 INSERT INTO t1 VALUES (1), (2), (3);
 SELECT DISTINCT i FROM t1 WHERE i = 1 GROUP BY i WITH ROLLUP;
 DROP TABLE t1;
+
+--echo #
+--echo # Bug #32918927: ASSERTION `!THD->IS_ERROR()' FAILED|SQL/SQL_EXECUTOR.CC
+--echo #
+
+CREATE TABLE t1 ( a TIME );
+
+SELECT
+  t1.a
+FROM
+  t1, t1 AS t2
+GROUP BY t1.a WITH ROLLUP
+HAVING COUNT(*) = 0 AND t1.a = '刔';
+
+DROP TABLE t1;
+
+--echo #
+--echo # Bug#33036184: GROUP BY WITH ROLLUP AND CONCAT OVER GROUP BY KEY DOES NOT PRODUCE NULL
+--echo #
+
+CREATE TABLE t1 (f1 INTEGER PRIMARY KEY);
+INSERT INTO t1 values (1);
+
+# Result should have a NULL for the super-aggregate row
+SELECT CONCAT(INSTR(f1,'w')) FROM t1 GROUP BY f1 WITH ROLLUP;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Bug #33041336: WL#14419: ASSERTION `THD->CHANGE_LIST.IS_EMPTY()' FAILED
+--echo #
+
+CREATE TABLE t1 ( a INTEGER );
+PREPARE ps FROM "SELECT RANK() OVER (ORDER BY a) FROM t1 GROUP BY a WITH ROLLUP";
+DROP TABLE t1;
+
+--echo #
+--echo # Bug #33123934: QUERY WITH ROLLUP - SEGFAULT IN CHANGE_TO_USE_TMP_FIELDS_EXCEPT_SUMS
+--echo #
+
+CREATE TABLE t1 ( a VARCHAR(10), b TIMESTAMP );
+
+SELECT
+  REPLACE( IF( t2.a = t2.b, _latin1 'a', 'e'), 'd', 'b' )
+FROM
+  t1, t1 AS t2
+GROUP BY
+  REPLACE( IF( t2.a = t2.b, _latin1 'a', 'e'), 'd', 'b' )
+WITH ROLLUP;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Bug #33149402: SELECT'S GROUPING() NOT TAKEN IN ACCOUNT IN HAVING WHEN JOIN USED
+--echo #
+
+CREATE TABLE t1 (a INTEGER, b INTEGER);
+INSERT INTO t1 VALUES (2020, 2);
+
+CREATE TABLE t2 (b INTEGER);
+INSERT INTO t2 VALUES (2);
+
+SELECT a, GROUPING(a) AS ga
+  FROM t1 JOIN t2 USING (b)
+  GROUP BY a WITH ROLLUP
+  HAVING ga = 0;
+
+DROP TABLE t1, t2;
+
+--echo #
+--echo # Bug#33729162: Hypergraph misses rows for SELECT DISTINCT ... GROUP BY WITH ROLLUP
+--echo #
+
+CREATE TABLE t (x INTEGER);
+INSERT INTO t VALUES (NULL), (0), (1), (2), (3);
+--sorted_result
+SELECT DISTINCT x AS a, x AS b FROM t GROUP BY a, b WITH ROLLUP;
+DROP TABLE t;
+
+--echo #
+--echo # Bug#333349994 GROUP BY CONST WITH ROLLUP CRASHES WHEN EXECUTE PREPARE STMT TWICE
+--echo #
+
+CREATE TABLE t (id BIGINT AUTO_INCREMENT PRIMARY KEY, i1 INT, i2 INT, i3 INT, s1 VARCHAR(20), s2 VARCHAR(20)) ENGINE=INNODB;
+INSERT INTO t VALUES
+    (DEFAULT,0,0,NULL, '', NULL), (DEFAULT,0,0,0, '123', 'abc'), (DEFAULT,0,0,1, '456', 'def'),
+    (DEFAULT,1,1,NULL, '', NULL), (DEFAULT,1,1,1, '123', 'abc'),  (DEFAULT,1,1,5, '456', 'def'),
+    (DEFAULT,1,2,9, '', NULL), (DEFAULT,1,2,9, '123', NULL), (DEFAULT,1,2,10, '456', 'def'),
+    (DEFAULT,2,1,1, '', NULL), (DEFAULT,2,1,1, '123', 'abc'),  (DEFAULT,2,1,NULL, '456', 'def'),
+    (DEFAULT,2,2,9, '', NULL), (DEFAULT,2,2,NULL, '123', 'abc'), (DEFAULT,2,2,12, '456', NULL),
+    (DEFAULT,3,1,1, '', NULL), (DEFAULT,3,1,1, NULL, 'abc'), (DEFAULT,3,1,11, '456', 'def'),
+    (DEFAULT,3,2,9, '', NULL), (DEFAULT,3,2,9, '123', 'abc'), (DEFAULT,3,2,16, NULL, 'def'), (DEFAULT,3, 2, 20, '789', 'ghi');
+ANALYZE TABLE t;
+
+SELECT DISTINCT t1.i1, t1.i2 FROM t AS t1 JOIN t AS t2 ON t1.i3 = t2.i2 GROUP BY t1.i1, t1.i2 WITH ROLLUP ORDER BY t1.i1, t1.i2;
+SELECT DISTINCT i1, i2, GROUPING(i1), GROUPING(i2), GROUPING(i1+i2), GROUPING(i1) + GROUPING(i2) FROM t GROUP BY i1, i2, i1 + i2 WITH ROLLUP ORDER BY i1, i2, i1+i2;
+--error ER_AGGREGATE_IN_ORDER_NOT_SELECT
+SELECT DISTINCT i1, i2, GROUPING(i1), GROUPING(i2) FROM t GROUP BY i1, i2 WITH ROLLUP ORDER BY i1, i2, GROUPING(i1+i2);
+DROP TABLE t;

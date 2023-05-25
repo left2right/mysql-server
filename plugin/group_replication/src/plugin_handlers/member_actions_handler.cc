@@ -1,4 +1,4 @@
-/* Copyright (c) 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2021, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -52,7 +52,10 @@ bool Member_actions_handler::init() {
 
   // Create worker thread.
   assert(nullptr == m_mysql_thread);
-  m_mysql_thread = new Mysql_thread(this);
+  m_mysql_thread = new Mysql_thread(
+      key_GR_THD_mysql_thread, key_GR_LOCK_mysql_thread_run,
+      key_GR_COND_mysql_thread_run, key_GR_LOCK_mysql_thread_dispatcher_run,
+      key_GR_COND_mysql_thread_dispatcher_run);
   if (m_mysql_thread->initialize()) {
     return true; /* purecov: inspected */
   }
@@ -77,12 +80,11 @@ bool Member_actions_handler::init() {
 
 bool Member_actions_handler::deinit() {
   DBUG_TRACE;
-  bool result = false;
 
   // Unregister listener on recv service.
   my_service<SERVICE_TYPE(registry_registration)> registrator(
       "registry_registration", get_plugin_registry());
-  result |= registrator->unregister(m_message_service_listener_name);
+  bool result = registrator->unregister(m_message_service_listener_name) != 0;
 
   // Terminate worker thread.
   if (nullptr != m_mysql_thread) {
@@ -131,7 +133,7 @@ bool Member_actions_handler::release_send_service() {
         reinterpret_cast<my_h_service>(
             m_group_replication_message_service_send);
     result |= get_plugin_registry()->release(
-        h_group_replication_message_service_send);
+                  h_group_replication_message_service_send) != 0;
     m_group_replication_message_service_send = nullptr;
   }
 
@@ -293,9 +295,10 @@ void Member_actions_handler::trigger_actions(
   DBUG_TRACE;
   assert(local_member_info->in_primary_mode());
 
-  Member_actions_trigger_parameters *parameters =
-      new Member_actions_trigger_parameters(event);
-  m_mysql_thread->trigger(parameters);
+  Mysql_thread_task *task =
+      new Mysql_thread_task(this, new Member_actions_trigger_parameters(event));
+  m_mysql_thread->trigger(task);
+  delete task;
 }
 
 void Member_actions_handler::run(Mysql_thread_body_parameters *parameters) {
@@ -309,7 +312,6 @@ void Member_actions_handler::run(Mysql_thread_body_parameters *parameters) {
          trigger_parameters->get_event());
   const std::string event =
       Member_actions::get_event_name(trigger_parameters->get_event());
-  delete trigger_parameters;
 
   // Get the actions for the event.
   protobuf_replication_group_member_actions::ActionList action_list;
@@ -352,7 +354,7 @@ void Member_actions_handler::run(Mysql_thread_body_parameters *parameters) {
           leave_actions.set(leave_group_on_failure::HANDLE_EXIT_STATE_ACTION,
                             true);
           leave_group_on_failure::leave(
-              leave_actions, 0, PSESSION_USE_THREAD, nullptr,
+              leave_actions, 0, nullptr,
               "Please check previous messages in the error log.");
         }
       }
@@ -370,7 +372,7 @@ int Member_actions_handler::run_internal_action(
 
   if (action.name() == "mysql_disable_super_read_only_if_primary") {
     if (im_the_primary) {
-      error = disable_server_read_mode(PSESSION_USE_THREAD);
+      error = disable_server_read_mode();
 
       DBUG_EXECUTE_IF(
           "group_replication_force_error_on_mysql_disable_super_read_only_if_"
@@ -382,6 +384,12 @@ int Member_actions_handler::run_internal_action(
       }
 
       return error;
+    }
+  }
+
+  if (action.name() == "mysql_start_failover_channels_if_primary") {
+    if (im_the_primary) {
+      return start_failover_channels();
     }
   }
 

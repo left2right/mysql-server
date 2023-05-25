@@ -1,4 +1,4 @@
-/* Copyright (c) 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2021, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -15,6 +15,7 @@
 
 #include "plugin/group_replication/include/perfschema/pfs.h"
 #include "mysql/components/my_service.h"
+#include "plugin/group_replication/include/perfschema/table_communication_information.h"
 #include "plugin/group_replication/include/perfschema/table_replication_group_configuration_version.h"
 #include "plugin/group_replication/include/perfschema/table_replication_group_member_actions.h"
 #include "plugin/group_replication/include/perfschema/utilities.h"
@@ -26,8 +27,8 @@ bool Perfschema_module::register_pfs_tables(Pfs_tables &tables) {
   Registry_guard guard;
   if (guard.get_registry() == nullptr) return true;
 
-  my_service<SERVICE_TYPE(pfs_plugin_table)> reg("pfs_plugin_table",
-                                                 guard.get_registry());
+  my_service<SERVICE_TYPE(pfs_plugin_table_v1)> reg("pfs_plugin_table_v1",
+                                                    guard.get_registry());
   std::vector<PFS_engine_table_share_proxy *> shares;
 
   for (auto &table : tables) shares.push_back(table->get_share());
@@ -42,8 +43,8 @@ bool Perfschema_module::unregister_pfs_tables(Pfs_tables &tables) {
   Registry_guard guard;
   if (guard.get_registry() == nullptr) return true;
 
-  my_service<SERVICE_TYPE(pfs_plugin_table)> reg("pfs_plugin_table",
-                                                 guard.get_registry());
+  my_service<SERVICE_TYPE(pfs_plugin_table_v1)> reg("pfs_plugin_table_v1",
+                                                    guard.get_registry());
   std::vector<PFS_engine_table_share_proxy *> shares;
 
   for (auto &table : tables) shares.push_back(table->get_share());
@@ -64,6 +65,11 @@ bool Perfschema_module::initialize() {
       std::make_unique<Pfs_table_replication_group_member_actions>();
   table_replication_group_member_actions->init();
   m_tables.push_back(std::move(table_replication_group_member_actions));
+
+  auto table_replication_communication_information =
+      std::make_unique<Pfs_table_communication_information>();
+  table_replication_communication_information->init();
+  m_tables.push_back(std::move(table_replication_communication_information));
 
   // Register all tables in one go.
   if (register_pfs_tables(m_tables)) {

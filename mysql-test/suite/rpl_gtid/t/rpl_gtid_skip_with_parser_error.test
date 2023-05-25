@@ -49,6 +49,7 @@
 --source include/have_binlog_format_mixed_or_row.inc
 --let $rpl_skip_start_slave = 1
 --source include/set_privilege_checks_user_as_system_user.inc
+--source include/not_rpl_gtid_only.inc
 --source include/master-slave.inc
 
 --let $MASTER_DATADIR= `select @@datadir`
@@ -103,5 +104,5 @@ SET GTID_NEXT=AUTOMATIC;
 # Restart applier thread that shall sync without issues.
 --source include/start_slave_sql.inc
 --source include/sync_slave_sql_with_io.inc
-CALL mtr.add_suppression("The slave coordinator and worker threads are stopped");
+CALL mtr.add_suppression("The replica coordinator and worker threads are stopped");
 --source include/rpl_end.inc

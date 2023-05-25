@@ -2,8 +2,6 @@ var common_stmts = require("common_statements");
 
 var options = {
   innodb_cluster_name: "test",
-  innodb_cluster_instances:
-      [["localhost", 5500], ["localhost", 5510], ["localhost", 5520]],
 };
 
 var common_responses = common_stmts.prepare_statement_responses(
@@ -33,6 +31,7 @@ var common_responses_regex = common_stmts.prepare_statement_responses_regex(
       "router_grant_on_routers",
       "router_grant_on_v2_routers",
       "router_update_routers_in_metadata",
+      "router_update_router_options_in_metadata",
     ],
     options);
 

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2021, Oracle and/or its affiliates.
+   Copyright (c) 2003, 2023, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -190,7 +190,7 @@ Dbtup::execCREATE_TRIG_IMPL_REQ(Signal* signal)
   else
   {
     SegmentedSectionPtr ptr;
-    handle.getSection(ptr, CreateTrigImplReq::ATTRIBUTE_MASK_SECTION);
+    ndbrequire(handle.getSection(ptr, CreateTrigImplReq::ATTRIBUTE_MASK_SECTION));
     ndbrequire(ptr.sz == mask.getSizeInWords());
     ::copy(mask.rep.data, ptr);
   }
@@ -1603,7 +1603,7 @@ out:
       trigAttrInfo->setTriggerId(triggerId);
     }
   }
-  // Fall through
+  [[fallthrough]];
   case (TriggerType::REORG_TRIGGER):
   case (TriggerType::FK_PARENT):
   case (TriggerType::FK_CHILD):
@@ -1736,13 +1736,13 @@ out:
       switch(regOperPtr->m_copy_tuple_location.m_file_no){
       case Operationrec::RF_SINGLE_NOT_EXIST:
         jam();
-        // Fall through
+        [[fallthrough]];
       case Operationrec::RF_MULTI_NOT_EXIST:
         jam();
         goto is_delete;
       case Operationrec::RF_SINGLE_EXIST:
         jam();
-        // Fall through
+        [[fallthrough]];
       case Operationrec::RF_MULTI_EXIST:
         jam();
         goto is_insert;
@@ -1782,14 +1782,14 @@ out:
     switch(regOperPtr->m_copy_tuple_location.m_file_no){
     case Operationrec::RF_SINGLE_NOT_EXIST:
       jam();
-      // Fall through
+      [[fallthrough]];
     case Operationrec::RF_MULTI_NOT_EXIST:
       jam();
       fireTrigOrd->m_triggerEvent = TriggerEvent::TE_DELETE;
       break;
     case Operationrec::RF_SINGLE_EXIST:
       jam();
-      // Fall through
+      [[fallthrough]];
     case Operationrec::RF_MULTI_EXIST:
       jam();
       fireTrigOrd->m_triggerEvent = TriggerEvent::TE_INSERT;
